@@ -11,7 +11,9 @@ import SwiftData
 /// 搜索页面 — 支持关键词搜索 + 时间筛选
 struct MemoSearchView: View {
     @Query(sort: \Memo.createdAt, order: .reverse) private var memos: [Memo]
+    @Environment(\.dismiss) private var dismiss
 
+    @Binding var selectedTag: Tag?
     @State private var searchText = ""
     @State private var memoToEdit: Memo?
     @State private var selectedTimeFilter: TimeFilter = .all
@@ -98,12 +100,15 @@ struct MemoSearchView: View {
                             }
                         } label: {
                             Text(filter.rawValue)
-                                .font(.system(size: 12, weight: isSelected ? .semibold : .regular, design: AppTheme.Layout.fontDesign))
+                                .font(.system(size: 12, weight: isSelected ? .bold : .regular, design: AppTheme.Layout.fontDesign))
+                                .foregroundStyle(isSelected ? .primary : .secondary)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
-                                .background(isSelected ? AppTheme.brandAccent : Color.secondary.opacity(0.1))
-                                .foregroundStyle(isSelected ? .white : .primary)
+                                .background(isSelected ? Color.primary.opacity(0.08) : Color.clear)
                                 .clipShape(Capsule())
+                                .overlay(
+                                    Capsule().stroke(isSelected ? Color.primary.opacity(0.15) : .clear, lineWidth: 1)
+                                )
                         }
                         .buttonStyle(.plain)
                     }
@@ -130,6 +135,11 @@ struct MemoSearchView: View {
                         ForEach(filteredMemos) { memo in
                             MemoCardView(memo: memo, onEdit: {
                                 memoToEdit = memo
+                            }, onTagTap: { tag in
+                                withAnimation(AppTheme.spring) {
+                                    selectedTag = tag
+                                }
+                                dismiss()
                             })
                             .memoCardStyle()
                         }

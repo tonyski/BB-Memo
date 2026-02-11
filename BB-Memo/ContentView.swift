@@ -68,18 +68,7 @@ struct MacContentView: View {
     @State private var showSettings = false
 
     private var filteredMemos: [Memo] {
-        let result = memos.filter { memo in
-            let matchesTag = selectedTag == nil || memo.tags.contains { $0.name == selectedTag?.name }
-            let matchesSearch = searchText.isEmpty || 
-                memo.content.localizedCaseInsensitiveContains(searchText) ||
-                memo.tags.contains { $0.name.localizedCaseInsensitiveContains(searchText) }
-            return matchesTag && matchesSearch
-        }
-
-        return result.sorted { a, b in
-            if a.isPinned != b.isPinned { return a.isPinned }
-            return a.createdAt > b.createdAt
-        }
+        MemoFilter.apply(memos, tag: selectedTag, searchText: searchText)
     }
 
     var body: some View {
@@ -196,15 +185,14 @@ struct MacContentView: View {
                         ForEach(filteredMemos, id: \.persistentModelID) { memo in
                             MemoCardView(memo: memo, onEdit: {
                                 memoToEdit = memo
+                            }, onTagTap: { tag in
+                                selectedTag = tag
                             })
                             .memoCardStyle()
-                            .onTapGesture(count: 2) {
-                                memoToEdit = memo
-                            }
                         }
                     }
                     .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
+                    .padding(.vertical, 12)
                     .frame(maxWidth: 720)
                     .frame(maxWidth: .infinity)
                 }
@@ -212,6 +200,23 @@ struct MacContentView: View {
             }
         }
         .navigationTitle(selectedTag.map { "#\($0.name)" } ?? "全部思考")
+        .toolbar {
+            if selectedTag != nil {
+                ToolbarItem(placement: .navigation) {
+                    Button {
+                        selectedTag = nil
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "xmark.circle.fill")
+                            Text("清除筛选")
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.brandAccent)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 }
 #endif

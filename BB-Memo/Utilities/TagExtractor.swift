@@ -65,11 +65,10 @@ enum TagExtractor {
     // MARK: - 综合建议
 
     /// 判断一个关键词是否符合“自动标签”的标准
-    private static func isAutoTag(keyword: String, text: String, existingTagNames: [String]) -> Bool {
-        if existingTagNames.map({ $0.lowercased() }).contains(keyword.lowercased()) {
-            return true // 已有的标签，高频词，自动关联
-        }
-        // 新词：仅在文本较长且作为第一个建议时自动关联 (比较保守)
+    private static func isAutoTag(keyword: String, text: String, existingNamesLowercased: Set<String>) -> Bool {
+        // 已有的标签，高频词，自动关联
+        guard !existingNamesLowercased.contains(keyword.lowercased()) else { return true }
+        // 新词：仅在文本较长时自动关联（比较保守）
         return text.count > 50
     }
 
@@ -77,12 +76,13 @@ enum TagExtractor {
     static func suggestTags(from text: String, existingTagNames: [String]) -> [TagSuggestion] {
         let aiKeywords = extractAITags(from: text, limit: 12)
         let currentHashtags = Set(extractHashtags(from: text).map { $0.lowercased() })
+        let existingLowercased = Set(existingTagNames.map { $0.lowercased() })
         
         var suggestions: [TagSuggestion] = []
         var autoAddedCount = 0
 
         for keyword in aiKeywords where !currentHashtags.contains(keyword.lowercased()) {
-            let isAuto = isAutoTag(keyword: keyword, text: text, existingTagNames: existingTagNames)
+            let isAuto = isAutoTag(keyword: keyword, text: text, existingNamesLowercased: existingLowercased)
             
             // 限制自动添加的数量上限为 3
             let autoAdded = isAuto && autoAddedCount < 3

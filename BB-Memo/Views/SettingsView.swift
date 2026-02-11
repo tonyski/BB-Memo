@@ -240,48 +240,45 @@ struct SettingsView: View {
     }
 
     private func handleImport(result: Result<[URL], Error>) {
-        switch result {
-        case .success(let urls):
-            guard let url = urls.first else { return }
-            
-            Task {
-                do {
-                    guard url.startAccessingSecurityScopedResource() else {
-                        throw ImportError.permissionDenied
-                    }
-                    defer { url.stopAccessingSecurityScopedResource() }
-                    
-                    let html = try String(contentsOf: url, encoding: .utf8)
-                    let flomoMemos = FlomoImporter.parse(html: html)
-                    
-                    var newMemoCount = 0
-                    for fMemo in flomoMemos {
-                        let tagNames = TagExtractor.extractHashtags(from: fMemo.content)
-                        let tags = try resolveTagsForImport(tagNames)
-                        
-                        let newMemo = Memo(
-                            content: fMemo.content,
-                            createdAt: fMemo.createdAt,
-                            updatedAt: fMemo.createdAt,
-                            tags: tags
-                        )
-                        modelContext.insert(newMemo)
-                        newMemoCount += 1
-                    }
-                    
-                    try modelContext.save()
-                    importMessage = newMemoCount > 0 ? "已成功迁移 \(newMemoCount) 条思考到 BB Memo" : "未在文件中找到可识别的 flomo 记录"
-                    showImportAlert = true
-                } catch {
-                    importMessage = "导入失败: \(error.localizedDescription)"
-                    showImportAlert = true
-                }
+        guard case .success(let urls) = result, let url = urls.first else {
+            if case .failure(let error) = result {
+                importMessage = "文件选择失败: \(error.localizedDescription)"
+                showImportAlert = true
             }
-            
-        case .failure(let error):
-            importMessage = "文件选择失败: \(error.localizedDescription)"
-            showImportAlert = true
+            return
         }
+        Task { await performImport(from: url) }
+    }
+
+    private func performImport(from url: URL) async {
+        do {
+            guard url.startAccessingSecurityScopedResource() else {
+                throw ImportError.permissionDenied
+            }
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            let html = try String(contentsOf: url, encoding: .utf8)
+            let flomoMemos = FlomoImporter.parse(html: html)
+
+            for fMemo in flomoMemos {
+                let tagNames = TagExtractor.extractHashtags(from: fMemo.content)
+                let tags = try resolveTagsForImport(tagNames)
+                modelContext.insert(Memo(
+                    content: fMemo.content,
+                    createdAt: fMemo.createdAt,
+                    updatedAt: fMemo.createdAt,
+                    tags: tags
+                ))
+            }
+
+            try modelContext.save()
+            importMessage = flomoMemos.isEmpty
+                ? "未在文件中找到可识别的 flomo 记录"
+                : "已成功迁移 \(flomoMemos.count) 条思考到 BB Memo"
+        } catch {
+            importMessage = "导入失败: \(error.localizedDescription)"
+        }
+        showImportAlert = true
     }
 
     private func resolveTagsForImport(_ names: [String]) throws -> [Tag] {

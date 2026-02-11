@@ -100,10 +100,10 @@ struct TagSidebarView: View {
     }
 
     private func closeSidebar() {
-        isOpen = false
-        #if os(iOS)
-        UISelectionFeedbackGenerator().selectionChanged()
-        #endif
+        withAnimation(AppTheme.spring) {
+            isOpen = false
+        }
+        HapticFeedback.selection.play()
     }
 
     private var headerSection: some View {
@@ -125,9 +125,7 @@ struct TagSidebarView: View {
     private var footerSection: some View {
         Button {
             showSettings = true
-            #if os(iOS)
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            #endif
+            HapticFeedback.light.play()
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "gearshape.fill")

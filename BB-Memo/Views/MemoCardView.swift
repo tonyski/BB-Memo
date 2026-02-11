@@ -13,8 +13,10 @@ struct MemoCardView: View {
     @Environment(\.modelContext) private var modelContext
     let memo: Memo
     var onEdit: (() -> Void)?
+    var onTagTap: ((Tag) -> Void)?
 
     @State private var isExpanded = false
+    @State private var showDeleteConfirm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.Layout.cardSpacing) {
@@ -22,8 +24,20 @@ struct MemoCardView: View {
             contentSection
             tagsRow
         }
-        .padding(AppTheme.Layout.cardPadding)
+        .padding(.top, 4)
+        .padding(.bottom, 6)
+        .padding(.horizontal, AppTheme.Layout.cardPadding)
         .sensoryFeedback(.impact, trigger: isExpanded)
+        .confirmationDialog("确定删除这条思考？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("删除", role: .destructive) {
+                withAnimation {
+                    NotificationManager.cancelReminder(
+                        memoID: memo.persistentModelID.hashValue.description
+                    )
+                    modelContext.delete(memo)
+                }
+            }
+        }
     }
 
     // MARK: - 顶部：日期 + 状态图标 + 菜单
@@ -73,12 +87,7 @@ struct MemoCardView: View {
             }
             Divider()
             Button(role: .destructive) {
-                withAnimation {
-                    NotificationManager.cancelReminder(
-                        memoID: memo.persistentModelID.hashValue.description
-                    )
-                    modelContext.delete(memo)
-                }
+                showDeleteConfirm = true
             } label: {
                 Label("删除", systemImage: "trash")
             }
@@ -126,13 +135,19 @@ struct MemoCardView: View {
             FlowLayout(spacing: 6) {
                 ForEach(memo.tags) { tag in
                     let color = AppTheme.tagColor(for: tag.name)
-                    Text("#\(tag.name)")
-                        .font(.system(size: 13, design: AppTheme.Layout.fontDesign))
-                        .foregroundStyle(color)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(color.opacity(0.12))
-                        .clipShape(Capsule())
+                    Button {
+                        onTagTap?(tag)
+                    } label: {
+                        Text("#\(tag.name)")
+                            .font(.system(size: 13, design: AppTheme.Layout.fontDesign))
+                            .foregroundStyle(color)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(color.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Capsule())
                 }
             }
         }

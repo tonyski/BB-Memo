@@ -18,16 +18,7 @@ struct MemoTimelineView: View {
 
     /// 过滤和排序后的 Memo
     private var filteredMemos: [Memo] {
-        let filtered = selectedTag.map { tag in
-            allMemos.filter { memo in
-                memo.tags.contains { $0.persistentModelID == tag.persistentModelID }
-            }
-        } ?? allMemos
-        
-        return filtered.sorted { a, b in
-            if a.isPinned != b.isPinned { return a.isPinned }
-            return a.createdAt > b.createdAt
-        }
+        MemoFilter.apply(allMemos, tag: selectedTag)
     }
 
     var body: some View {
@@ -100,9 +91,25 @@ struct MemoTimelineView: View {
 
             // 标题
             VStack(spacing: 2) {
-                Text(selectedTag.map { "#\($0.name)" } ?? "BB Memo")
-                    .font(.system(size: 17, weight: .semibold, design: AppTheme.Layout.fontDesign))
-                    .foregroundStyle(.primary)
+                HStack(spacing: 4) {
+                    Text(selectedTag.map { "#\($0.name)" } ?? "BB Memo")
+                        .font(.system(size: 17, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                        .foregroundStyle(.primary)
+                    
+                    if selectedTag != nil {
+                        Button {
+                            withAnimation(AppTheme.spring) {
+                                selectedTag = nil
+                            }
+                            HapticFeedback.light.play()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary.opacity(0.5))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
                 
                 if selectedTag == nil {
                     Text("\(allMemos.count) 条记录")
@@ -115,7 +122,7 @@ struct MemoTimelineView: View {
 
             // 搜索按钮
             NavigationLink {
-                MemoSearchView()
+                MemoSearchView(selectedTag: $selectedTag)
             } label: {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 18))
@@ -135,7 +142,7 @@ struct MemoTimelineView: View {
     private var memoList: some View {
         ScrollView {
             LazyVStack(spacing: AppTheme.Layout.cardSpacing) {
-                // 顶部间距 (避让 TopBar)
+                // 顶部间距（动态避让 TopBar）
                 Spacer().frame(height: 60)
 
                 if filteredMemos.isEmpty {
@@ -144,11 +151,10 @@ struct MemoTimelineView: View {
                     ForEach(filteredMemos, id: \.persistentModelID) { memo in
                         MemoCardView(memo: memo, onEdit: {
                             memoToEdit = memo
+                        }, onTagTap: { tag in
+                            selectedTag = tag
                         })
                         .memoCardStyle()
-                        .onTapGesture(count: 2) {
-                            memoToEdit = memo
-                        }
                     }
                 }
 
@@ -176,4 +182,3 @@ struct MemoTimelineView: View {
         .padding(.top, 140)
     }
 }
-

@@ -25,23 +25,25 @@ enum AppTheme {
     
     // MARK: - 标签色彩
     
-    static let tagPalette: [Color] = [
-        .secondary, 
-        Color(white: 0.4), 
-        Color(white: 0.5), 
-        Color(white: 0.6), 
-        Color(white: 0.3), 
-        .gray
-    ]
-    
-    static func tagColor(for name: String) -> Color {
-        tagPalette[abs(name.hashValue) % tagPalette.count]
-    }
+    static func tagColor(for name: String) -> Color { .secondary }
 
     // MARK: - 视觉样式
     
-    static let cardBackground = Color(UIColor.secondarySystemGroupedBackground)
-    static let background = Color(UIColor.systemGroupedBackground)
+    static var cardBackground: Color {
+        #if os(iOS)
+        Color(UIColor.secondarySystemGroupedBackground)
+        #else
+        Color(NSColor.controlBackgroundColor)
+        #endif
+    }
+
+    static var background: Color {
+        #if os(iOS)
+        Color(UIColor.systemGroupedBackground)
+        #else
+        Color(NSColor.windowBackgroundColor)
+        #endif
+    }
     
     static var brandGradient: LinearGradient {
         .linearGradient(colors: [brandAccent, brandAccent.opacity(0.8)], startPoint: .topLeading, endPoint: .bottomTrailing)

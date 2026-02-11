@@ -145,8 +145,9 @@ enum MemoTagResolver {
             .filter { $0.isAutoAdded && !$0.isExcluded }
             .map { $0.name }
         
-        // 3. 合并去重
-        let combinedNames = Array(Set(explicitNames + autoNames))
+        // 3. 合并去重（保持用户书写顺序）
+        var seen = Set<String>()
+        let combinedNames = (explicitNames + autoNames).filter { seen.insert($0).inserted }
         
         return combinedNames.map { name in
             if let existing = allTags.first(where: { $0.name == name }) {

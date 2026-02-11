@@ -33,51 +33,55 @@ struct MemoEditorView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                TextEditor(text: $content)
-                    .font(.system(.body, design: AppTheme.Layout.fontDesign, weight: .regular))
-                    .lineSpacing(6)
-                    .padding(.horizontal, AppTheme.Layout.screenPadding)
-                    .padding(.top, 12)
-                    .scrollContentBackground(.hidden)
-                    .focused($isFocused)
-                    .onChange(of: content) { _, newValue in
-                        EditorHelper.triggerAIAnalysis(newValue, allTags: allTags, debounceTask: &debounceTask, suggestions: $aiSuggestions)
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $content)
+                        .font(.system(.body, design: AppTheme.Layout.fontDesign, weight: .regular))
+                        .lineSpacing(6)
+                        .scrollContentBackground(.hidden)
+                        .focused($isFocused)
+                        .onChange(of: content) { _, newValue in
+                            EditorHelper.triggerAIAnalysis(newValue, allTags: allTags, debounceTask: &debounceTask, suggestions: $aiSuggestions)
+                        }
+
+                    if content.isEmpty {
+                        Text("写下你的想法...")
+                            .font(.system(.body, design: AppTheme.Layout.fontDesign))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 8)
+                            .padding(.leading, 5)
+                            .allowsHitTesting(false)
                     }
+                }
+                .padding(.horizontal, AppTheme.Layout.screenPadding)
+                .padding(.top, 12)
 
                 Spacer()
 
                 if !aiSuggestions.isEmpty {
                     AISuggestionBar(suggestions: aiSuggestions) { tag in
                         EditorHelper.insertTag(tag, into: &content, suggestions: &aiSuggestions)
-                        #if os(iOS)
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        #endif
+                        HapticFeedback.light.play()
                     }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
                 if let date = reminderDate {
-                    ReminderBanner(date: date) { 
-                        reminderDate = nil 
-                        #if os(iOS)
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        #endif
+                    ReminderBanner(date: date) {
+                        reminderDate = nil
+                        HapticFeedback.medium.play()
                     }
                 }
 
                 EditorToolbar(
                     reminderDate: reminderDate,
-                    onHashtag: { 
+                    onHashtag: {
+                        if !content.isEmpty && !content.hasSuffix(" ") { content += " " }
                         content += "#"
-                        #if os(iOS)
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        #endif
+                        HapticFeedback.light.play()
                     },
-                    onReminder: { 
-                        showReminderPicker = true 
-                        #if os(iOS)
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        #endif
+                    onReminder: {
+                        showReminderPicker = true
+                        HapticFeedback.light.play()
                     }
                 ) {
                     if let memo = memo {
@@ -126,9 +130,7 @@ struct MemoEditorView: View {
     private func save() {
         guard !trimmedContent.isEmpty else { return }
         
-        #if os(iOS)
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        #endif
+        HapticFeedback.medium.play()
 
         let tags = MemoTagResolver.resolveTags(
             from: trimmedContent, 
