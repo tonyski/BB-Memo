@@ -8,59 +8,254 @@
 import SwiftUI
 import SwiftData
 
+/// 主视图 — 根据平台自动切换布局
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @State private var showComposer = false
+    @State private var showSidebar = false
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
+        #if os(macOS)
+        MacContentView(showComposer: $showComposer)
+            .sheet(isPresented: $showComposer) {
+                MemoEditorView(memo: nil)
+                    .frame(minWidth: 440, minHeight: 480)
+            }
+        #else
+        NavigationStack {
+            ZStack(alignment: .bottom) {
+                MemoTimelineView(showSidebar: $showSidebar)
+
+                // 底部浮动按钮
+                if !showSidebar {
+                    Button {
+                        showComposer = true
                     } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
+                        Image(systemName: "plus")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 54, height: 54)
+                            .background(AppTheme.brandAccent)
+                            .clipShape(Circle())
+                            .shadow(color: AppTheme.brandAccent.opacity(0.3), radius: 10, y: 5)
                     }
-                }
-                .onDelete(perform: deleteItems)
-            }
-#if os(macOS)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-#endif
-            .toolbar {
-#if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-#endif
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-        } detail: {
-            Text("Select an item")
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+            .animation(.default, value: showSidebar)
+            .sheet(isPresented: $showComposer) {
+                MemoEditorView(memo: nil)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             }
         }
+        #endif
     }
 }
 
+// MARK: - macOS 布局
+
+#if os(macOS)
+struct MacContentView: View {
+    @Query(sort: \Memo.createdAt, order: .reverse) private var memos: [Memo]
+    @Query(sort: \Tag.name) private var allTags: [Tag]
+
+    @Binding var showComposer: Bool
+    @State private var selectedTag: Tag?
+    @State private var memoToEdit: Memo?
+    @State private var searchText = ""
+
+    @State private var showSettings = false
+
+    private var filteredMemos: [Memo] {
+        let result = memos.filter { memo in
+            let matchesTag = selectedTag == nil || memo.tags.contains { $0.name == selectedTag?.name }
+            let matchesSearch = searchText.isEmpty || 
+                memo.content.localizedCaseInsensitiveContains(searchText) ||
+                memo.tags.contains { $0.name.localizedCaseInsensitiveContains(searchText) }
+            return matchesTag && matchesSearch
+        }
+
+        return result.sorted { a, b in
+            if a.isPinned != b.isPinned { return a.isPinned }
+            return a.createdAt > b.createdAt
+        }
+    }
+
+    var body: some View {
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            memoDetail
+        }
+        .searchable(text: $searchText, prompt: "搜索内容或标签")
+        .sheet(isPresented: $showComposer) {
+            MemoEditorView(memo: nil)
+                .frame(minWidth: 480, minHeight: 400)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $memoToEdit) { memo in
+            MemoEditorView(memo: memo)
+                .frame(minWidth: 480, minHeight: 400)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+                .frame(minWidth: 440, minHeight: 520)
+        }
+    }
+
+    // MARK: - 侧栏
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("BB Memo")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundStyle(AppTheme.brandAccent)
+                Spacer()
+                Button { showComposer = true } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 14, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                        .foregroundStyle(AppTheme.brandAccent)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("n", modifiers: .command)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+
+            Divider()
+
+            List {
+                MacSidebarRow(
+                    title: "全部思考",
+                    count: memos.count,
+                    isSelected: selectedTag == nil,
+                    icon: "tray.full"
+                ) {
+                    selectedTag = nil
+                }
+
+                if !allTags.isEmpty {
+                    Section("标签") {
+                        ForEach(allTags) { tag in
+                            MacSidebarRow(
+                                title: tag.name,
+                                count: tag.memos.count,
+                                isSelected: selectedTag?.persistentModelID == tag.persistentModelID,
+                                icon: "#",
+                                isTag: true
+                            ) {
+                                selectedTag = tag
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+
+            Divider()
+
+            Button { showSettings = true } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "gearshape").font(.subheadline)
+                    Text("设置").font(.subheadline)
+                    Spacer()
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .buttonStyle(.plain)
+        }
+        .background(.ultraThinMaterial)
+        .frame(minWidth: 260)
+    }
+
+    // MARK: - 内容区
+
+    private var memoDetail: some View {
+        Group {
+            if filteredMemos.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: selectedTag != nil ? "tag" : "square.and.pencil")
+                        .font(.system(size: 40))
+                        .foregroundStyle(Color.secondary.opacity(0.3))
+                    Text(selectedTag != nil ? "该标签下暂无内容" : "点击 ⌘N 开始记录")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: AppTheme.Layout.cardSpacing) {
+                        ForEach(filteredMemos, id: \.persistentModelID) { memo in
+                            MemoCardView(memo: memo, onEdit: {
+                                memoToEdit = memo
+                            })
+                            .memoCardStyle()
+                            .onTapGesture(count: 2) {
+                                memoToEdit = memo
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 20)
+                    .frame(maxWidth: 720)
+                    .frame(maxWidth: .infinity)
+                }
+                .background(AppTheme.background)
+            }
+        }
+        .navigationTitle(selectedTag.map { "#\($0.name)" } ?? "全部思考")
+    }
+}
+#endif
+
+// MARK: - Helper Views
+
+#if os(macOS)
+struct MacSidebarRow: View {
+    let title: String
+    let count: Int
+    let isSelected: Bool
+    let icon: String
+    var isTag: Bool = false
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Label {
+                HStack {
+                    Text(title)
+                        .font(.system(size: 13, weight: isSelected ? .semibold : .regular, design: AppTheme.Layout.fontDesign))
+                    Spacer()
+                    Text("\(count)")
+                        .font(.system(size: 10, design: AppTheme.Layout.fontDesign))
+                        .foregroundStyle(.tertiary)
+                }
+            } icon: {
+                if isTag {
+                    Text(icon)
+                        .font(.system(size: 13, weight: .bold, design: AppTheme.Layout.fontDesign))
+                        .foregroundStyle(AppTheme.brandAccent)
+                } else {
+                    Image(systemName: icon)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(isSelected ? AppTheme.brandAccent.opacity(0.1) : Color.clear)
+    }
+}
+#endif
+
+
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .modelContainer(for: [Memo.self, Tag.self], inMemory: true)
 }

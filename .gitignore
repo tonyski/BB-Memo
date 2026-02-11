@@ -1,0 +1,55 @@
+# Xcode
+#
+# gitignore contributors: remember to update Global/Xcode.gitignore, Objective-C.gitignore & Swift.gitignore
+
+## User settings
+xcuserdata/
+
+## xcode scripts
+*.moved-aside
+
+## Xcode patch files
+*.patch
+
+## App packaging
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Swift Package Manager
+#
+# Add this line if you want to avoid checking in source code from RFCs.
+# .build/
+
+# CocoaPods
+#
+# We recommend against adding the Pods directory to your .gitignore. However
+# if you're still determined to do so, un-comment the next line.
+# Pods/
+
+# Carthage
+#
+# Add this line if you want to avoid checking in source code from Carthage dependencies.
+# Carthage/Checkouts/
+
+# AccuRev
+.accurev/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+
+# Code Injection
+#
+# After running with CodeInjection, a directory called `InjectionIII` will be created in your project's directory.
+InjectionIII/
+
+# macOS
+#
+.DS_Store
