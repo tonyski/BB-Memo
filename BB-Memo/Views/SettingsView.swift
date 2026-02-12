@@ -19,22 +19,19 @@ struct SettingsView: View {
 
     @Environment(\.modelContext) private var modelContext
     @State private var isImporting = false
+    @State private var isProcessingImport = false
     @State private var showImportAlert = false
     @State private var importMessage = ""
 
     enum SyncStatus: Equatable {
         case checking
         case synced
-        case syncing
-        case error(String)
         case notAvailable
 
         var label: String {
             switch self {
             case .checking: return "检查中..."
-            case .synced: return "已同步"
-            case .syncing: return "同步中..."
-            case .error(let msg): return "同步异常：\(msg)"
+            case .synced: return "iCloud 可用"
             case .notAvailable: return "iCloud 不可用"
             }
         }
@@ -43,8 +40,6 @@ struct SettingsView: View {
             switch self {
             case .checking: return "arrow.triangle.2.circlepath"
             case .synced: return "checkmark.icloud"
-            case .syncing: return "arrow.triangle.2.circlepath.icloud"
-            case .error: return "exclamationmark.icloud"
             case .notAvailable: return "icloud.slash"
             }
         }
@@ -53,8 +48,6 @@ struct SettingsView: View {
             switch self {
             case .checking: return .gray
             case .synced: return .green
-            case .syncing: return .orange
-            case .error: return .red
             case .notAvailable: return .red
             }
         }
@@ -91,6 +84,23 @@ struct SettingsView: View {
             .padding(20)
         }
         .background(AppTheme.background.ignoresSafeArea())
+        .overlay {
+            if isProcessingImport {
+                ZStack {
+                    Color.black.opacity(0.15).ignoresSafeArea()
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("导入中...")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .transition(.opacity)
+            }
+        }
         .onAppear { checkiCloudStatus() }
         .fileImporter(
             isPresented: $isImporting,
@@ -222,9 +232,14 @@ struct SettingsView: View {
                 isImporting = true
             } label: {
                 HStack {
-                    Image(systemName: "square.and.arrow.down.on.square")
-                        .foregroundStyle(AppTheme.brandAccent)
-                    Text("从 flomo 迁移 (.html)")
+                    if isProcessingImport {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "square.and.arrow.down.on.square")
+                            .foregroundStyle(AppTheme.brandAccent)
+                    }
+                    Text(isProcessingImport ? "正在导入..." : "从 flomo 迁移 (.html)")
                         .foregroundStyle(.primary)
                     Spacer()
                     Image(systemName: "chevron.right")
@@ -234,6 +249,7 @@ struct SettingsView: View {
                 .padding(.vertical, 4)
             }
             .buttonStyle(.plain)
+            .disabled(isProcessingImport)
         }
         .padding(16)
         .memoCardStyle(cornerRadius: 12)
@@ -247,63 +263,21 @@ struct SettingsView: View {
             }
             return
         }
+        isProcessingImport = true
         Task { await performImport(from: url) }
     }
 
     private func performImport(from url: URL) async {
+        defer { isProcessingImport = false }
         do {
-            guard url.startAccessingSecurityScopedResource() else {
-                throw ImportError.permissionDenied
-            }
-            defer { url.stopAccessingSecurityScopedResource() }
-
-            let html = try String(contentsOf: url, encoding: .utf8)
-            let flomoMemos = FlomoImporter.parse(html: html)
-
-            for fMemo in flomoMemos {
-                let tagNames = TagExtractor.extractHashtags(from: fMemo.content)
-                let tags = try resolveTagsForImport(tagNames)
-                modelContext.insert(Memo(
-                    content: fMemo.content,
-                    createdAt: fMemo.createdAt,
-                    updatedAt: fMemo.createdAt,
-                    tags: tags
-                ))
-                TagUsageCounter.increment(tags)
-            }
-
-            try modelContext.save()
-            importMessage = flomoMemos.isEmpty
+            let summary = try await FlomoImportService.importFromFile(at: url, context: modelContext)
+            importMessage = summary.importedCount == 0
                 ? "未在文件中找到可识别的 flomo 记录"
-                : "已成功迁移 \(flomoMemos.count) 条思考到 BB Memo"
+                : "已成功迁移 \(summary.importedCount) 条思考到 BB Memo"
         } catch {
             importMessage = "导入失败: \(error.localizedDescription)"
         }
         showImportAlert = true
-    }
-
-    private func resolveTagsForImport(_ names: [String]) throws -> [Tag] {
-        var results: [Tag] = []
-        for name in names {
-            let descriptor = FetchDescriptor<Tag>(predicate: #Predicate<Tag> { $0.name == name })
-            if let existing = try modelContext.fetch(descriptor).first {
-                results.append(existing)
-            } else {
-                let newTag = Tag(name: name)
-                modelContext.insert(newTag)
-                results.append(newTag)
-            }
-        }
-        return results
-    }
-    
-    enum ImportError: LocalizedError {
-        case permissionDenied
-        var errorDescription: String? {
-            switch self {
-            case .permissionDenied: return "无法获取文件访问权限"
-            }
-        }
     }
 
     // MARK: - 关于

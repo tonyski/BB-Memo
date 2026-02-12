@@ -21,6 +21,8 @@ final class Memo {
     
     /// 判断内容是否为长文本
     var isLong: Bool { content.count > 180 }
+    /// 稳定提醒标识（避免使用 hashValue 导致重启后不一致）
+    var reminderIdentifier: String { String(describing: persistentModelID) }
 
     init(
         content: String,

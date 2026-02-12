@@ -12,19 +12,34 @@ import SwiftData
 struct MemoTimelineView: View {
     @Environment(\.modelContext) private var modelContext
 
+    private struct PagingState {
+        var tagLoadedCount = 0
+        var pinnedLoadedCount = 0
+        var unpinnedLoadedCount = 0
+        var pinnedExhausted = false
+        var canLoadMore = true
+        var isLoadingPage = false
+
+        mutating func reset() {
+            tagLoadedCount = 0
+            pinnedLoadedCount = 0
+            unpinnedLoadedCount = 0
+            pinnedExhausted = false
+            canLoadMore = true
+            isLoadingPage = false
+        }
+    }
+
     @State private var memoToEdit: Memo?
     @Binding var showSidebar: Bool
     @State private var selectedTag: Tag?
     @State private var displayedMemos: [Memo] = []
-    @State private var loadedCount = 0
-    @State private var pinnedLoadedCount = 0
-    @State private var unpinnedLoadedCount = 0
-    @State private var pinnedExhausted = false
-    @State private var canLoadMore = true
-    @State private var isLoadingPage = false
+    @State private var paging = PagingState()
     @State private var totalMemoCount = 0
 
     private let pageSize = 40
+    private let topBarContentHeight: CGFloat = 44
+    private var topBarReservedHeight: CGFloat { topBarContentHeight + 16 }
 
     var body: some View {
         ZStack {
@@ -33,22 +48,6 @@ struct MemoTimelineView: View {
                 memoList
             }
             .background(AppTheme.background)
-            .overlay(alignment: .leading) {
-                // 左侧边缘滑动区域 (Moved here to be behind TopBar)
-                Color.clear
-                    .frame(width: 40)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 20)
-                            .onEnded { value in
-                                if value.translation.width > 80 && !showSidebar {
-                                    withAnimation(AppTheme.spring) {
-                                        showSidebar = true
-                                    }
-                                }
-                            }
-                    )
-            }
 
             // ── 顶部栏 ──
             VStack(spacing: 0) {
@@ -65,13 +64,12 @@ struct MemoTimelineView: View {
                 isOpen: $showSidebar
             )
         }
+        .simultaneousGesture(edgeOpenSidebarGesture)
         #if os(iOS)
         .navigationBarHidden(true)
         #endif
         .sheet(item: $memoToEdit, onDismiss: resetAndReload) { memo in
-            MemoEditorView(memo: memo)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+            MemoEditorSheetView(memo: memo)
         }
         .onAppear {
             if displayedMemos.isEmpty {
@@ -149,6 +147,7 @@ struct MemoTimelineView: View {
         }
         .padding(.top, safeAreaInsets.top + 4)
         .padding(.bottom, 12)
+        .frame(minHeight: topBarContentHeight + safeAreaInsets.top, alignment: .bottom)
     }
 
     @Environment(\.safeAreaInsets) private var safeAreaInsets
@@ -159,9 +158,9 @@ struct MemoTimelineView: View {
         ScrollView {
             LazyVStack(spacing: AppTheme.Layout.cardSpacing) {
                 // 顶部间距（动态避让 TopBar）
-                Spacer().frame(height: 60)
+                Spacer().frame(height: topBarReservedHeight)
 
-                if displayedMemos.isEmpty && !isLoadingPage {
+                if displayedMemos.isEmpty && !paging.isLoadingPage {
                     emptyState
                 } else {
                     ForEach(displayedMemos, id: \.persistentModelID) { memo in
@@ -177,7 +176,7 @@ struct MemoTimelineView: View {
                     }
                 }
 
-                if isLoadingPage {
+                if paging.isLoadingPage {
                     ProgressView()
                         .padding(.top, 8)
                 }
@@ -188,6 +187,22 @@ struct MemoTimelineView: View {
             .padding(.horizontal, AppTheme.Layout.screenPadding)
         }
         .scrollIndicators(.hidden)
+    }
+
+    private var edgeOpenSidebarGesture: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onEnded { value in
+                guard !showSidebar else { return }
+                let fromEdge = value.startLocation.x <= 20
+                let horizontalDistance = value.translation.width
+                let verticalDistance = abs(value.translation.height)
+                let isMostlyHorizontal = abs(horizontalDistance) > verticalDistance * 1.4
+                guard fromEdge, isMostlyHorizontal, horizontalDistance > 80 else { return }
+
+                withAnimation(AppTheme.spring) {
+                    showSidebar = true
+                }
+            }
     }
 
     // MARK: - 空状态
@@ -210,18 +225,13 @@ struct MemoTimelineView: View {
 
     private func resetAndReload() {
         displayedMemos = []
-        loadedCount = 0
-        pinnedLoadedCount = 0
-        unpinnedLoadedCount = 0
-        pinnedExhausted = false
-        canLoadMore = true
-        isLoadingPage = false
+        paging.reset()
         refreshTotalCount()
         loadNextPage()
     }
 
     private func loadNextPageIfNeeded(current memo: Memo) {
-        guard canLoadMore, !isLoadingPage else { return }
+        guard paging.canLoadMore, !paging.isLoadingPage else { return }
         guard let idx = displayedMemos.firstIndex(where: {
             $0.persistentModelID == memo.persistentModelID
         }) else { return }
@@ -231,16 +241,16 @@ struct MemoTimelineView: View {
     }
 
     private func loadNextPage() {
-        guard canLoadMore, !isLoadingPage else { return }
-        isLoadingPage = true
-        defer { isLoadingPage = false }
+        guard paging.canLoadMore, !paging.isLoadingPage else { return }
+        paging.isLoadingPage = true
+        defer { paging.isLoadingPage = false }
 
         if let tag = selectedTag {
-            let sorted = sortMemos(tag.memos)
-            let page = Array(sorted.dropFirst(loadedCount).prefix(pageSize))
+            let sorted = MemoFilter.sort(tag.memos)
+            let page = Array(sorted.dropFirst(paging.tagLoadedCount).prefix(pageSize))
             displayedMemos.append(contentsOf: page)
-            loadedCount += page.count
-            canLoadMore = page.count == pageSize && loadedCount < sorted.count
+            paging.tagLoadedCount += page.count
+            paging.canLoadMore = page.count == pageSize && paging.tagLoadedCount < sorted.count
             return
         }
 
@@ -248,20 +258,20 @@ struct MemoTimelineView: View {
             var page: [Memo] = []
             var remaining = pageSize
 
-            if !pinnedExhausted {
+            if !paging.pinnedExhausted {
                 var pinnedDescriptor = FetchDescriptor<Memo>(
                     predicate: #Predicate<Memo> { $0.isPinned == true },
                     sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
                 )
-                pinnedDescriptor.fetchOffset = pinnedLoadedCount
+                pinnedDescriptor.fetchOffset = paging.pinnedLoadedCount
                 pinnedDescriptor.fetchLimit = remaining
 
                 let pinnedPage = try modelContext.fetch(pinnedDescriptor)
                 page.append(contentsOf: pinnedPage)
-                pinnedLoadedCount += pinnedPage.count
+                paging.pinnedLoadedCount += pinnedPage.count
                 remaining -= pinnedPage.count
                 if pinnedPage.count < pageSize {
-                    pinnedExhausted = true
+                    paging.pinnedExhausted = true
                 }
             }
 
@@ -270,18 +280,18 @@ struct MemoTimelineView: View {
                     predicate: #Predicate<Memo> { $0.isPinned == false },
                     sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
                 )
-                unpinnedDescriptor.fetchOffset = unpinnedLoadedCount
+                unpinnedDescriptor.fetchOffset = paging.unpinnedLoadedCount
                 unpinnedDescriptor.fetchLimit = remaining
 
                 let unpinnedPage = try modelContext.fetch(unpinnedDescriptor)
                 page.append(contentsOf: unpinnedPage)
-                unpinnedLoadedCount += unpinnedPage.count
+                paging.unpinnedLoadedCount += unpinnedPage.count
             }
 
             displayedMemos.append(contentsOf: page)
-            canLoadMore = displayedMemos.count < totalMemoCount
+            paging.canLoadMore = displayedMemos.count < totalMemoCount
         } catch {
-            canLoadMore = false
+            paging.canLoadMore = false
         }
     }
 
@@ -295,14 +305,6 @@ struct MemoTimelineView: View {
             totalMemoCount = try modelContext.fetchCount(descriptor)
         } catch {
             totalMemoCount = displayedMemos.count
-        }
-    }
-
-    private func sortMemos(_ memos: [Memo]) -> [Memo] {
-        memos.sorted { lhs, rhs in
-            if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
-            if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
-            return lhs.persistentModelID.hashValue > rhs.persistentModelID.hashValue
         }
     }
 }

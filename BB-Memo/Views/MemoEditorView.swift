@@ -23,6 +23,8 @@ struct MemoEditorView: View {
     @State private var debounceTask: Task<Void, Never>?
     @State private var selectedTagNames: Set<String> = []
     @State private var activeSheet: ActiveSheet?
+    @State private var showSaveErrorAlert = false
+    @State private var saveErrorMessage = ""
 
     @FocusState private var isFocused: Bool
 
@@ -152,6 +154,11 @@ struct MemoEditorView: View {
                     #endif
                 }
             }
+            .alert("保存失败", isPresented: $showSaveErrorAlert) {
+                Button("确定", role: .cancel) {}
+            } message: {
+                Text(saveErrorMessage)
+            }
             .onAppear {
                 if let memo = memo {
                     content = memo.content
@@ -178,7 +185,7 @@ struct MemoEditorView: View {
             allTags: allTags,
             context: modelContext
         )
-        let memoID: String
+        let targetMemo: Memo
 
         if let memo = memo {
             // 更新已有
@@ -188,14 +195,23 @@ struct MemoEditorView: View {
             memo.reminderDate = reminderDate
             memo.tags = tags
             TagUsageCounter.applyDelta(oldTags: oldTags, newTags: tags)
-            memoID = memo.persistentModelID.hashValue.description
+            targetMemo = memo
         } else {
             // 新建
             let newMemo = Memo(content: trimmedContent, reminderDate: reminderDate, tags: tags)
             modelContext.insert(newMemo)
             TagUsageCounter.increment(tags)
-            memoID = newMemo.persistentModelID.hashValue.description
+            targetMemo = newMemo
         }
+
+        do {
+            try modelContext.save()
+        } catch {
+            saveErrorMessage = error.localizedDescription
+            showSaveErrorAlert = true
+            return
+        }
+        let memoID = targetMemo.reminderIdentifier
 
         // 通知管理
         NotificationManager.cancelReminder(memoID: memoID)
@@ -203,7 +219,7 @@ struct MemoEditorView: View {
             NotificationManager.scheduleReminder(memoID: memoID, content: trimmedContent, at: date)
         }
 
-        NotificationCenter.default.post(name: .memoDataChanged, object: nil)
+        AppNotifications.postMemoDataChanged()
         dismiss()
     }
 

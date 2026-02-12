@@ -33,10 +33,10 @@ struct MemoCardView: View {
                 withAnimation {
                     TagUsageCounter.decrement(memo.tags)
                     NotificationManager.cancelReminder(
-                        memoID: memo.persistentModelID.hashValue.description
+                        memoID: memo.reminderIdentifier
                     )
                     modelContext.delete(memo)
-                    NotificationCenter.default.post(name: .memoDataChanged, object: nil)
+                    AppNotifications.postMemoDataChanged()
                 }
             }
         }
@@ -47,10 +47,6 @@ struct MemoCardView: View {
     private var headerRow: some View {
         HStack(spacing: 6) {
             Text(memo.createdAt, style: .relative)
-                .font(.system(size: 11, design: AppTheme.Layout.fontDesign))
-                .foregroundStyle(.secondary)
-            
-            Text("前")
                 .font(.system(size: 11, design: AppTheme.Layout.fontDesign))
                 .foregroundStyle(.secondary)
 
@@ -81,6 +77,7 @@ struct MemoCardView: View {
             }
             Button {
                 withAnimation(AppTheme.spring) { memo.isPinned.toggle() }
+                AppNotifications.postMemoDataChanged()
             } label: {
                 Label(
                     memo.isPinned ? "取消置顶" : "置顶",

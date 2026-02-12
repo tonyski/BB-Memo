@@ -9,24 +9,35 @@ import SwiftData
 /// 统一的 Memo 过滤 + 置顶排序逻辑
 enum MemoFilter {
 
+    static func sort(_ memos: [Memo]) -> [Memo] {
+        memos.sorted { lhs, rhs in
+            if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+            return String(describing: lhs.persistentModelID) > String(describing: rhs.persistentModelID)
+        }
+    }
+
     /// 按标签过滤、关键词搜索，并按 置顶 > 创建时间 排序
     static func apply(
         _ memos: [Memo],
         tag: Tag? = nil,
         searchText: String = ""
     ) -> [Memo] {
-        memos
-            .filter { memo in
-                let matchesTag = tag == nil
-                    || memo.tags.contains { $0.persistentModelID == tag?.persistentModelID }
-                let matchesSearch = searchText.isEmpty
-                    || memo.content.localizedCaseInsensitiveContains(searchText)
-                    || memo.tags.contains { $0.name.localizedCaseInsensitiveContains(searchText) }
-                return matchesTag && matchesSearch
+        sort(
+            memos.filter { memo in
+                matchesTag(memo, tag: tag) && matchesSearch(memo, searchText: searchText)
             }
-            .sorted { a, b in
-                if a.isPinned != b.isPinned { return a.isPinned }
-                return a.createdAt > b.createdAt
-            }
+        )
+    }
+
+    private static func matchesTag(_ memo: Memo, tag: Tag?) -> Bool {
+        guard let tag else { return true }
+        return memo.tags.contains { $0.persistentModelID == tag.persistentModelID }
+    }
+
+    private static func matchesSearch(_ memo: Memo, searchText: String) -> Bool {
+        guard !searchText.isEmpty else { return true }
+        return memo.content.localizedCaseInsensitiveContains(searchText)
+            || memo.tags.contains { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
 }

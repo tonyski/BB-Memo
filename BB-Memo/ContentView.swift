@@ -16,10 +16,6 @@ struct ContentView: View {
     var body: some View {
         #if os(macOS)
         MacContentView(showComposer: $showComposer)
-            .sheet(isPresented: $showComposer) {
-                MemoEditorView(memo: nil)
-                    .frame(minWidth: 440, minHeight: 480)
-            }
         #else
         NavigationStack {
             ZStack(alignment: .bottom) {
@@ -44,9 +40,7 @@ struct ContentView: View {
             }
             .animation(.default, value: showSidebar)
             .sheet(isPresented: $showComposer) {
-                MemoEditorView(memo: nil)
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
+                MemoEditorSheetView(memo: nil)
             }
         }
         #endif
@@ -84,20 +78,13 @@ struct MacContentView: View {
         }
         .searchable(text: $searchText, prompt: "搜索内容或标签")
         .sheet(isPresented: $showComposer) {
-            MemoEditorView(memo: nil)
-                .frame(minWidth: 480, minHeight: 400)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+            MemoEditorSheetView(memo: nil)
         }
         .sheet(item: $memoToEdit) { memo in
-            MemoEditorView(memo: memo)
-                .frame(minWidth: 480, minHeight: 400)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+            MemoEditorSheetView(memo: memo)
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView()
-                .frame(minWidth: 440, minHeight: 520)
+            SettingsSheetView()
         }
     }
 

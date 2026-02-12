@@ -16,42 +16,14 @@ struct MemoSearchView: View {
     @Binding var selectedTag: Tag?
     @State private var searchText = ""
     @State private var memoToEdit: Memo?
-    @State private var selectedTimeFilter: TimeFilter = .all
+    @State private var selectedTimeFilter: MemoTimeFilter = .all
     @FocusState private var isFocused: Bool
-
-    // MARK: - 时间筛选枚举
-
-    enum TimeFilter: String, CaseIterable, Identifiable {
-        case all = "全部"
-        case today = "今天"
-        case week = "近一周"
-        case month = "近一月"
-        case threeMonths = "近三月"
-
-        var id: String { rawValue }
-
-        var startDate: Date? {
-            let cal = Calendar.current
-            let now = Date.now
-            switch self {
-            case .all: return nil
-            case .today: return cal.startOfDay(for: now)
-            case .week: return cal.date(byAdding: .day, value: -7, to: now)
-            case .month: return cal.date(byAdding: .month, value: -1, to: now)
-            case .threeMonths: return cal.date(byAdding: .month, value: -3, to: now)
-            }
-        }
-    }
 
     private var filteredMemos: [Memo] {
         // 未输入关键词时不展示内容
         guard !searchText.isEmpty else { return [] }
 
-        // 关键词搜索
-        var result = memos.filter {
-            $0.content.localizedCaseInsensitiveContains(searchText) ||
-            $0.tags.contains { $0.name.localizedCaseInsensitiveContains(searchText) }
-        }
+        var result = MemoFilter.apply(memos, searchText: searchText)
 
         // 时间筛选
         if let start = selectedTimeFilter.startDate {
@@ -92,7 +64,7 @@ struct MemoSearchView: View {
             // 时间筛选
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(TimeFilter.allCases, id: \.self) { filter in
+                    ForEach(MemoTimeFilter.allCases, id: \.self) { filter in
                         let isSelected = selectedTimeFilter == filter
                         Button {
                             withAnimation(.easeInOut(duration: 0.15)) {
@@ -156,7 +128,7 @@ struct MemoSearchView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .sheet(item: $memoToEdit) { memo in
-            MemoEditorView(memo: memo)
+            MemoEditorSheetView(memo: memo)
         }
         .onAppear { isFocused = true }
     }

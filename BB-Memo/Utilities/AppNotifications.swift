@@ -10,3 +10,9 @@ import Foundation
 extension Notification.Name {
     static let memoDataChanged = Notification.Name("memoDataChanged")
 }
+
+enum AppNotifications {
+    static func postMemoDataChanged() {
+        NotificationCenter.default.post(name: .memoDataChanged, object: nil)
+    }
+}

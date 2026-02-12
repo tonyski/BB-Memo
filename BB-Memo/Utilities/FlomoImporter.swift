@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct FlomoMemo {
+struct FlomoMemo: Sendable {
     let content: String
     let createdAt: Date
 }
@@ -15,7 +15,7 @@ struct FlomoMemo {
 enum FlomoImporter {
     
     /// 解析 flomo 导出的 HTML 内容
-    static func parse(html: String) -> [FlomoMemo] {
+    nonisolated static func parse(html: String) -> [FlomoMemo] {
         var memos: [FlomoMemo] = []
         
         let memoPattern = #"<div class="memo">\s*<div class="time">(.*?)</div>\s*<div class="content">(.*?)</div>"#
@@ -45,7 +45,7 @@ enum FlomoImporter {
         return memos
     }
     
-    private static func cleanHtml(_ html: String) -> String {
+    private nonisolated static func cleanHtml(_ html: String) -> String {
         var text = html
         
         // 1. 处理常见标签为换行或列表符

@@ -51,7 +51,7 @@ struct TagSidebarView: View {
         // 关键修复：当关闭时，侧边栏不应拦截主界面的触摸
         .allowsHitTesting(isOpen)
         .sheet(isPresented: $showSettings) {
-            SettingsView()
+            SettingsSheetView()
         }
     }
 

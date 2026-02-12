@@ -96,12 +96,4 @@ enum TagExtractor {
 
         return Array(suggestions.prefix(8))
     }
-
-    // MARK: - 自动关联逻辑
-
-    /// 自动发现并关联标签（用于保存时自动生成）
-    static func autoDiscoverTags(from text: String, existingTagNames: [String]) -> [String] {
-        let suggestions = suggestTags(from: text, existingTagNames: existingTagNames)
-        return suggestions.filter { $0.isAutoAdded }.map { $0.name }
-    }
 }
