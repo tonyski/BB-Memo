@@ -18,34 +18,37 @@ struct TagSidebarView: View {
     ) private var allTags: [Tag]
     @Binding var selectedTag: Tag?
     @Binding var isOpen: Bool
+    @Environment(\.modelContext) private var modelContext
     @State private var showSettings = false
-
-    private let sidebarWidth: CGFloat = 280
+    @State private var tagPendingDeletion: Tag?
     
     var body: some View {
-        ZStack(alignment: .leading) {
-            // 半透明背景遮罩 + 模糊
-            if isOpen {
-                Color.black.opacity(0.15)
-                    .background(.ultraThinMaterial.opacity(0.5))
-                    .ignoresSafeArea()
-                    .onTapGesture {
-                        withAnimation(AppTheme.spring) {
-                            isOpen = false
+        GeometryReader { proxy in
+            let sidebarWidth = idealSidebarWidth(totalWidth: proxy.size.width)
+            ZStack(alignment: .leading) {
+                // 半透明背景遮罩 + 模糊
+                if isOpen {
+                    Color.black.opacity(0.15)
+                        .background(.ultraThinMaterial.opacity(0.5))
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(AppTheme.spring) {
+                                isOpen = false
+                            }
                         }
-                    }
-                    .transition(.opacity)
-            }
+                        .transition(.opacity)
+                }
 
-            // 侧边栏面板
-            HStack(spacing: 0) {
-                sidebarContent
-                    .background(AppTheme.cardBackground)
-                    .ignoresSafeArea() // 修复上下缺口
-                    .premiumShadow()
-                Spacer()
+                // 侧边栏面板
+                HStack(spacing: 0) {
+                    sidebarContent(width: sidebarWidth)
+                        .background(AppTheme.cardBackground)
+                        .ignoresSafeArea() // 修复上下缺口
+                        .premiumShadow()
+                    Spacer(minLength: 0)
+                }
+                .offset(x: isOpen ? 0 : -sidebarWidth)
             }
-            .offset(x: isOpen ? 0 : -sidebarWidth)
         }
         .animation(AppTheme.spring, value: isOpen)
         // 关键修复：当关闭时，侧边栏不应拦截主界面的触摸
@@ -53,11 +56,29 @@ struct TagSidebarView: View {
         .sheet(isPresented: $showSettings) {
             SettingsSheetView()
         }
+        .confirmationDialog(
+            "删除标签？",
+            isPresented: Binding(
+                get: { tagPendingDeletion != nil },
+                set: { isPresented in
+                    if !isPresented { tagPendingDeletion = nil }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("删除标签", role: .destructive) {
+                guard let tagPendingDeletion else { return }
+                deleteTag(tagPendingDeletion)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("仅删除标签，不删除 Memo。")
+        }
     }
 
     // MARK: - 侧边栏内容
 
-    private var sidebarContent: some View {
+    private func sidebarContent(width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             // 头部区域
             headerSection
@@ -87,6 +108,9 @@ struct TagSidebarView: View {
                             action: {
                                 selectedTag = tag
                                 closeSidebar()
+                            },
+                            onDeleteRequest: {
+                                tagPendingDeletion = tag
                             }
                         )
                     }
@@ -97,7 +121,11 @@ struct TagSidebarView: View {
             .frame(maxHeight: .infinity, alignment: .top)
             .scrollIndicators(.hidden)
         }
-        .frame(width: sidebarWidth)
+        .frame(width: width)
+    }
+
+    private func idealSidebarWidth(totalWidth: CGFloat) -> CGFloat {
+        min(max(totalWidth * 0.82, 248), 340)
     }
 
     private func closeSidebar() {
@@ -105,6 +133,16 @@ struct TagSidebarView: View {
             isOpen = false
         }
         HapticFeedback.selection.play()
+    }
+
+    private func deleteTag(_ tag: Tag) {
+        if selectedTag?.persistentModelID == tag.persistentModelID {
+            selectedTag = nil
+        }
+        modelContext.delete(tag)
+        try? modelContext.save()
+        HapticFeedback.medium.play()
+        tagPendingDeletion = nil
     }
 
     private var headerSection: some View {
@@ -150,6 +188,7 @@ struct SidebarItemView: View {
     var count: Int? = nil
     let isSelected: Bool
     let action: () -> Void
+    var onDeleteRequest: (() -> Void)? = nil
     
     var body: some View {
         Button(action: action) {
@@ -185,6 +224,7 @@ struct SidebarItemView: View {
                         .clipShape(Capsule())
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12).padding(.vertical, 9)
             .background(isSelected ? AppTheme.brandAccent.opacity(0.15) : .clear)
             .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -193,7 +233,17 @@ struct SidebarItemView: View {
                     .stroke(AppTheme.brandAccent.opacity(isSelected ? 0.1 : 0), lineWidth: 1)
             )
             .foregroundStyle(isSelected ? .primary : .secondary)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            if isTag, let onDeleteRequest {
+                Button(role: .destructive) {
+                    onDeleteRequest()
+                } label: {
+                    Label("删除标签", systemImage: "trash")
+                }
+            }
+        }
     }
 }

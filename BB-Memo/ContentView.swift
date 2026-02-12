@@ -58,6 +58,7 @@ struct MacContentView: View {
             SortDescriptor(\Tag.name, order: .forward)
         ]
     ) private var allTags: [Tag]
+    @Environment(\.modelContext) private var modelContext
 
     @Binding var showComposer: Bool
     @State private var selectedTag: Tag?
@@ -65,6 +66,7 @@ struct MacContentView: View {
     @State private var searchText = ""
 
     @State private var showSettings = false
+    @State private var tagPendingDeletion: Tag?
 
     private var filteredMemos: [Memo] {
         MemoFilter.apply(memos, tag: selectedTag, searchText: searchText)
@@ -85,6 +87,24 @@ struct MacContentView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsSheetView()
+        }
+        .confirmationDialog(
+            "删除标签？",
+            isPresented: Binding(
+                get: { tagPendingDeletion != nil },
+                set: { isPresented in
+                    if !isPresented { tagPendingDeletion = nil }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("删除标签", role: .destructive) {
+                guard let tagPendingDeletion else { return }
+                deleteTag(tagPendingDeletion)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("仅删除标签，不删除 Memo。")
         }
     }
 
@@ -130,7 +150,10 @@ struct MacContentView: View {
                                 count: tag.usageCount,
                                 isSelected: selectedTag?.persistentModelID == tag.persistentModelID,
                                 icon: "#",
-                                isTag: true
+                                isTag: true,
+                                onDeleteRequest: {
+                                    tagPendingDeletion = tag
+                                }
                             ) {
                                 selectedTag = tag
                             }
@@ -210,6 +233,15 @@ struct MacContentView: View {
             }
         }
     }
+
+    private func deleteTag(_ tag: Tag) {
+        if selectedTag?.persistentModelID == tag.persistentModelID {
+            selectedTag = nil
+        }
+        modelContext.delete(tag)
+        try? modelContext.save()
+        tagPendingDeletion = nil
+    }
 }
 #endif
 
@@ -222,6 +254,7 @@ struct MacSidebarRow: View {
     let isSelected: Bool
     let icon: String
     var isTag: Bool = false
+    var onDeleteRequest: (() -> Void)? = nil
     let action: () -> Void
     
     var body: some View {
@@ -235,6 +268,7 @@ struct MacSidebarRow: View {
                         .font(.system(size: 10, design: AppTheme.Layout.fontDesign))
                         .foregroundStyle(.tertiary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             } icon: {
                 if isTag {
                     Text(icon)
@@ -244,9 +278,19 @@ struct MacSidebarRow: View {
                     Image(systemName: icon)
                 }
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .listRowBackground(isSelected ? AppTheme.brandAccent.opacity(0.1) : Color.clear)
+        .contextMenu {
+            if isTag, let onDeleteRequest {
+                Button(role: .destructive) {
+                    onDeleteRequest()
+                } label: {
+                    Label("删除标签", systemImage: "trash")
+                }
+            }
+        }
     }
 }
 #endif

@@ -11,50 +11,20 @@ import Foundation
 
 @main
 struct BB_MemoApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Memo.self,
-            Tag.self,
-        ])
-        let cloudConfiguration = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: false,
-            cloudKitDatabase: .automatic
-        )
-        let localConfiguration = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: false
-        )
-        let inMemoryConfiguration = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: true
-        )
+    @StateObject private var syncDiagnostics: SyncDiagnostics
+    private let sharedModelContainer: ModelContainer
 
-        do {
-            return try ModelContainer(for: schema, configurations: [cloudConfiguration])
-        } catch let cloudError {
-            do {
-                return try ModelContainer(for: schema, configurations: [localConfiguration])
-            } catch let localError {
-                // 模型变更导致旧数据不兼容时，清除旧数据重试（本地配置）
-                let url = localConfiguration.url
-                try? FileManager.default.removeItem(at: url)
-                try? FileManager.default.removeItem(at: url.appendingPathExtension("wal"))
-                try? FileManager.default.removeItem(at: url.appendingPathExtension("shm"))
-                do {
-                    return try ModelContainer(for: schema, configurations: [localConfiguration])
-                } catch let retryError {
-                    do {
-                        return try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
-                    } catch {
-                        fatalError(
-                            "Could not create ModelContainer. cloudError=\(cloudError), localError=\(localError), retryError=\(retryError), inMemoryError=\(error)"
-                        )
-                    }
-                }
-            }
-        }
-    }()
+    init() {
+        let bootstrap = AppContainerFactory.make()
+        self.sharedModelContainer = bootstrap.container
+        _syncDiagnostics = StateObject(
+            wrappedValue: SyncDiagnostics(
+                iCloudContainerIdentifier: AppContainerFactory.iCloudContainerIdentifier,
+                storageMode: bootstrap.storageMode,
+                startupMessage: bootstrap.startupMessage
+            )
+        )
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -65,6 +35,10 @@ struct BB_MemoApp: App {
                         TagUsageCounter.backfillIfNeeded(container: sharedModelContainer)
                     }
                 }
+                .task {
+                    await syncDiagnostics.refreshAccountStatus()
+                }
+                .environmentObject(syncDiagnostics)
                 #if os(macOS)
                 .frame(minWidth: 700, minHeight: 500)
                 #endif

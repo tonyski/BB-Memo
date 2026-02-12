@@ -93,29 +93,12 @@ struct MemoEditorView: View {
                 }
                 .padding(.horizontal, AppTheme.Layout.screenPadding)
                 .padding(.top, 12)
-
-                Spacer()
-
-                if !mergedTagSuggestions.isEmpty {
-                    AISuggestionBar(
-                        suggestions: mergedTagSuggestions,
-                        selectedTagNames: selectedTagNames
-                    ) { tag in
-                        EditorHelper.toggleTag(tag.name, selectedTagNames: &selectedTagNames)
-                        HapticFeedback.light.play()
-                    } onAddCustom: {
-                        activeSheet = .tagPicker
-                    }
-                    .animation(nil, value: selectedTagNames)
-                }
-
-                reminderButton
-                .buttonStyle(.plain)
-                .padding(.horizontal, AppTheme.Layout.screenPadding)
-                .padding(.top, mergedTagSuggestions.isEmpty ? 8 : 10)
-                .padding(.bottom, 10)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(AppTheme.cardBackground)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                bottomAccessoryArea
+            }
             .navigationTitle(isEditing ? "编辑思考" : "新思考")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -169,6 +152,30 @@ struct MemoEditorView: View {
                 }
             }
         }
+    }
+
+    private var bottomAccessoryArea: some View {
+        VStack(spacing: 0) {
+            if !mergedTagSuggestions.isEmpty {
+                AISuggestionBar(
+                    suggestions: mergedTagSuggestions,
+                    selectedTagNames: selectedTagNames
+                ) { tag in
+                    EditorHelper.toggleTag(tag.name, selectedTagNames: &selectedTagNames)
+                    HapticFeedback.light.play()
+                } onAddCustom: {
+                    activeSheet = .tagPicker
+                }
+                .animation(nil, value: selectedTagNames)
+            }
+
+            reminderButton
+                .buttonStyle(.plain)
+                .padding(.horizontal, AppTheme.Layout.screenPadding)
+                .padding(.top, mergedTagSuggestions.isEmpty ? 8 : 10)
+                .padding(.bottom, 10)
+        }
+        .background(AppTheme.cardBackground)
     }
 
     // MARK: - Actions

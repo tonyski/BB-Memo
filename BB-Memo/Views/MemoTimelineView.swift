@@ -38,31 +38,21 @@ struct MemoTimelineView: View {
     @State private var totalMemoCount = 0
 
     private let pageSize = 40
-    private let topBarContentHeight: CGFloat = 44
-    private var topBarReservedHeight: CGFloat { topBarContentHeight + 16 }
+    private let topBarFadeAnimation = Animation.easeOut(duration: 0.12)
 
     var body: some View {
         ZStack {
-            // ── 主体内容 ──
-            VStack(spacing: 0) {
-                memoList
-            }
-            .background(AppTheme.background)
-
-            // ── 顶部栏 ──
-            VStack(spacing: 0) {
-                topBar
-                    .background(.ultraThinMaterial)
-                Divider().opacity(0.5)
-                Spacer()
-            }
-            .ignoresSafeArea(edges: .top)
+            memoList
+                .background(AppTheme.background)
 
             // ── 侧边栏 ──
             TagSidebarView(
                 selectedTag: $selectedTag,
                 isOpen: $showSidebar
             )
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            topBarInset
         }
         .simultaneousGesture(edgeOpenSidebarGesture)
         #if os(iOS)
@@ -85,6 +75,17 @@ struct MemoTimelineView: View {
     }
 
     // MARK: - 顶部栏
+
+    private var topBarInset: some View {
+        VStack(spacing: 0) {
+            topBar
+                .background(.ultraThinMaterial)
+            Divider().opacity(0.5)
+        }
+        .opacity(showSidebar ? 0 : 1)
+        .allowsHitTesting(!showSidebar)
+        .animation(topBarFadeAnimation, value: showSidebar)
+    }
 
     private var topBar: some View {
         HStack(spacing: 4) {
@@ -145,21 +146,15 @@ struct MemoTimelineView: View {
             .buttonStyle(.ghost)
             .padding(.trailing, 8)
         }
-        .padding(.top, safeAreaInsets.top + 4)
-        .padding(.bottom, 12)
-        .frame(minHeight: topBarContentHeight + safeAreaInsets.top, alignment: .bottom)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
     }
-
-    @Environment(\.safeAreaInsets) private var safeAreaInsets
 
     // MARK: - Memo 列表
 
     private var memoList: some View {
         ScrollView {
             LazyVStack(spacing: AppTheme.Layout.cardSpacing) {
-                // 顶部间距（动态避让 TopBar）
-                Spacer().frame(height: topBarReservedHeight)
-
                 if displayedMemos.isEmpty && !paging.isLoadingPage {
                     emptyState
                 } else {
@@ -184,6 +179,7 @@ struct MemoTimelineView: View {
                 // 底部间距
                 Spacer().frame(height: 120)
             }
+            .padding(.top, 8)
             .padding(.horizontal, AppTheme.Layout.screenPadding)
         }
         .scrollIndicators(.hidden)

@@ -8,14 +8,13 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import CloudKit
 
 /// 设置页面 — 展示 iCloud 同步状态
 struct SettingsView: View {
     @Query private var memos: [Memo]
     @Query private var tags: [Tag]
-
-    @State private var syncStatus: SyncStatus = .checking
-    @State private var lastStatusCheckDate: Date?
+    @EnvironmentObject private var syncDiagnostics: SyncDiagnostics
 
     @Environment(\.modelContext) private var modelContext
     @State private var isImporting = false
@@ -23,34 +22,13 @@ struct SettingsView: View {
     @State private var showImportAlert = false
     @State private var importMessage = ""
 
-    enum SyncStatus: Equatable {
-        case checking
-        case available
-        case notAvailable
+    private let syncInsightColumns = [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8)
+    ]
 
-        var label: String {
-            switch self {
-            case .checking: return "检查中..."
-            case .available: return "iCloud 可用"
-            case .notAvailable: return "iCloud 不可用"
-            }
-        }
-
-        var icon: String {
-            switch self {
-            case .checking: return "arrow.triangle.2.circlepath"
-            case .available: return "checkmark.icloud"
-            case .notAvailable: return "icloud.slash"
-            }
-        }
-
-        var color: Color {
-            switch self {
-            case .checking: return .gray
-            case .available: return .green
-            case .notAvailable: return .red
-            }
-        }
+    private var remindersCount: Int {
+        memos.filter { $0.reminderDate != nil }.count
     }
 
     private var lastLocalUpdateDate: Date? {
@@ -60,7 +38,7 @@ struct SettingsView: View {
     var body: some View {
         #if os(macOS)
         settingsContent
-            .frame(minWidth: 380, minHeight: 420)
+            .frame(minWidth: 420, minHeight: 520)
         #else
         NavigationStack {
             settingsContent
@@ -72,20 +50,14 @@ struct SettingsView: View {
 
     private var settingsContent: some View {
         ScrollView {
-            VStack(spacing: 16) {
-                // iCloud 同步状态卡片
-                syncStatusCard
-
-                // 数据统计卡片
-                dataStatsCard
-
-                // 数据管理
-                dataManagementCard
-
-                // 关于
-                aboutCard
+            VStack(spacing: 10) {
+                syncOverviewPanel
+                syncInsightPanel
+                dataOverviewPanel
+                dataManagementPanel
+                appInfoPanel
             }
-            .padding(20)
+            .padding(12)
         }
         .background(AppTheme.background.ignoresSafeArea())
         .overlay {
@@ -105,7 +77,7 @@ struct SettingsView: View {
                 .transition(.opacity)
             }
         }
-        .onAppear { checkiCloudStatus() }
+        .task { await syncDiagnostics.refreshAccountStatus() }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.html],
@@ -120,154 +92,240 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - iCloud 同步状态
+    // MARK: - 新布局
 
-    private var syncStatusCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "icloud")
-                    .font(.title3)
-                    .foregroundStyle(AppTheme.brandAccent)
-                Text("iCloud 同步")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-            }
-
-            Divider()
-
-            HStack(spacing: 12) {
-                // 状态指示灯
-                ZStack {
-                    Circle()
-                        .fill(syncStatus.color.opacity(0.2))
-                        .frame(width: 36, height: 36)
-                    Image(systemName: syncStatus.icon)
-                        .font(.body)
-                        .foregroundStyle(syncStatus.color)
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(syncStatus.label)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                    if syncStatus == .available {
-                        Text("CloudKit 已启用，数据后台异步同步")
+    private var syncOverviewPanel: some View {
+        panelContainer(borderColor: syncIndicatorColor.opacity(0.28)) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    panelTitle("同步状态", icon: "icloud")
+                    Spacer()
+                    statusBadge(text: isSyncHealthy ? "正常" : "需处理", color: syncIndicatorColor)
+                    Button {
+                        Task { await syncDiagnostics.refreshAccountStatus() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(AppTheme.brandAccent)
+                            .frame(width: 24, height: 24)
                     }
-                    if let date = lastLocalUpdateDate {
-                        Text("最近本地更新：\(date.formatted(.relative(presentation: .named)))")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    if let date = lastStatusCheckDate {
-                        Text("状态检查：\(date.formatted(.relative(presentation: .named)))")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
+                    .buttonStyle(.plain)
                 }
 
-                Spacer()
+                HStack(spacing: 8) {
+                    ZStack {
+                        Circle()
+                            .fill(syncIndicatorColor.opacity(0.18))
+                            .frame(width: 28, height: 28)
+                        Image(systemName: syncIndicatorIcon)
+                            .font(.caption2)
+                            .foregroundStyle(syncIndicatorColor)
+                    }
 
-                // 刷新按钮
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(syncPrimaryLabel)
+                            .font(.footnote)
+                            .fontWeight(.semibold)
+                        Text(syncSecondaryLabel)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+            }
+        }
+    }
+
+    private var syncInsightPanel: some View {
+        panelContainer {
+            VStack(alignment: .leading, spacing: 10) {
+                panelTitle("同步透视", icon: "waveform.path.ecg")
+
+                LazyVGrid(columns: syncInsightColumns, spacing: 8) {
+                    insightTile(title: "存储模式", value: syncDiagnostics.storageMode.label)
+                    insightTile(title: "账号状态", value: accountStatusLabel)
+                    insightTile(
+                        title: "最近检查",
+                        value: syncDiagnostics.lastStatusCheckDate?.formatted(.relative(presentation: .named)) ?? "未检查"
+                    )
+                    insightTile(title: "诊断条目", value: "\(diagnosticMessages.count)")
+                }
+
+                if !diagnosticMessages.isEmpty {
+                    DisclosureGroup("诊断详情") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(diagnosticMessages.enumerated()), id: \.offset) { _, message in
+                                Text("• \(message)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                    .font(.caption2)
+                    .tint(.secondary)
+                }
+            }
+        }
+    }
+
+    private var dataOverviewPanel: some View {
+        panelContainer {
+            VStack(alignment: .leading, spacing: 10) {
+                panelTitle("数据概览", icon: "chart.bar")
+
+                HStack(spacing: 8) {
+                    metricTile(icon: "doc.text", label: "Memo", value: "\(memos.count)")
+                    metricTile(icon: "tag", label: "标签", value: "\(tags.count)")
+                    metricTile(icon: "bell", label: "提醒", value: "\(remindersCount)")
+                }
+
+                if let lastLocalUpdateDate {
+                    Text("最近更新：\(lastLocalUpdateDate.formatted(.relative(presentation: .named)))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var dataManagementPanel: some View {
+        panelContainer {
+            VStack(alignment: .leading, spacing: 8) {
+                panelTitle("数据管理", icon: "square.and.arrow.down")
+
                 Button {
-                    checkiCloudStatus()
+                    isImporting = true
                 } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.subheadline)
+                    HStack(spacing: 8) {
+                        Group {
+                            if isProcessingImport {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "square.and.arrow.down.on.square")
+                            }
+                        }
                         .foregroundStyle(AppTheme.brandAccent)
+
+                        Text(isProcessingImport ? "正在导入 flomo..." : "从 flomo 导入 (.html)")
+                            .font(.footnote)
+                            .foregroundStyle(.primary)
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(AppTheme.brandAccent.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .buttonStyle(.plain)
+                .disabled(isProcessingImport)
             }
         }
-        .padding(16)
-        .memoCardStyle(cornerRadius: 12)
     }
 
-    // MARK: - 数据统计
-
-    private var dataStatsCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "chart.bar")
-                    .font(.title3)
-                    .foregroundStyle(AppTheme.brandAccent)
-                Text("数据统计")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-            }
-
-            Divider()
-
-            HStack(spacing: 0) {
-                statItem(icon: "doc.text", label: "MEMO", value: "\(memos.count)")
-                Spacer()
-                statItem(icon: "tag", label: "标签", value: "\(tags.count)")
-                Spacer()
-                statItem(icon: "pin", label: "置顶", value: "\(memos.filter(\.isPinned).count)")
+    private var appInfoPanel: some View {
+        panelContainer {
+            VStack(alignment: .leading, spacing: 8) {
+                panelTitle("应用信息", icon: "info.circle")
+                infoRow(label: "版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
             }
         }
-        .padding(16)
-        .memoCardStyle(cornerRadius: 12)
     }
 
-    private func statItem(icon: String, label: String, value: String) -> some View {
-        VStack(spacing: 6) {
+    // MARK: - 组件
+
+    private func panelContainer<Content: View>(
+        borderColor: Color = .primary.opacity(0.06),
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(AppTheme.cardBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(borderColor, lineWidth: 1)
+                    )
+            )
+            .shadow(color: .black.opacity(0.04), radius: 8, y: 3)
+    }
+
+    private func panelTitle(_ text: String, icon: String) -> some View {
+        HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(AppTheme.brandAccent.opacity(0.7))
+                .font(.caption)
+                .foregroundStyle(AppTheme.brandAccent)
+            Text(text)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+        }
+    }
+
+    private func statusBadge(text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.12), in: Capsule())
+    }
+
+    private func insightTile(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             Text(value)
-                .font(.title2)
-                .fontWeight(.bold)
+                .font(.caption)
+                .fontWeight(.medium)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func metricTile(icon: String, label: String, value: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(AppTheme.brandAccent.opacity(0.75))
+            Text(value)
+                .font(.footnote)
+                .fontWeight(.semibold)
                 .foregroundStyle(AppTheme.brandAccent)
             Text(label)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
-    // MARK: - 数据管理
-
-    private var dataManagementCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "square.and.arrow.down")
-                    .font(.title3)
-                    .foregroundStyle(AppTheme.brandAccent)
-                Text("数据管理")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-            }
-
-            Divider()
-
-            Button {
-                isImporting = true
-            } label: {
-                HStack {
-                    if isProcessingImport {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "square.and.arrow.down.on.square")
-                            .foregroundStyle(AppTheme.brandAccent)
-                    }
-                    Text(isProcessingImport ? "正在导入..." : "从 flomo 迁移 (.html)")
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 4)
-            }
-            .buttonStyle(.plain)
-            .disabled(isProcessingImport)
+    private func infoRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.footnote)
+                .fontWeight(.medium)
         }
-        .padding(16)
-        .memoCardStyle(cornerRadius: 12)
     }
+
+    // MARK: - 导入
 
     private func handleImport(result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else {
@@ -294,53 +352,78 @@ struct SettingsView: View {
         showImportAlert = true
     }
 
-    // MARK: - 关于
+    // MARK: - 同步状态映射
 
-    private var aboutCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "info.circle")
-                    .font(.title3)
-                    .foregroundStyle(AppTheme.brandAccent)
-                Text("关于")
-                    .font(.headline)
-                    .fontWeight(.semibold)
+    private var syncPrimaryLabel: String {
+        switch syncDiagnostics.storageMode {
+        case .cloudKit:
+            if syncDiagnostics.accountStatus == .available {
+                return "同步中"
             }
-
-            Divider()
-
-            VStack(spacing: 8) {
-                infoRow(label: "版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
-                infoRow(label: "构建", value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1")
-            }
-        }
-        .padding(16)
-        .memoCardStyle(cornerRadius: 12)
-    }
-
-    private func infoRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
-                .font(.subheadline)
-                .fontWeight(.medium)
+            return "账号异常（同步受限）"
+        case .localFallback:
+            return "本地模式（未同步）"
+        case .inMemoryFallback:
+            return "临时模式（不持久化）"
         }
     }
 
-    // MARK: - iCloud 检测
-
-    private func checkiCloudStatus() {
-        syncStatus = .checking
-        lastStatusCheckDate = .now
-
-        // 通过 ubiquityIdentityToken 检测 iCloud 账户可用性
-        if FileManager.default.ubiquityIdentityToken != nil {
-            syncStatus = .available
-        } else {
-            syncStatus = .notAvailable
+    private var syncIndicatorIcon: String {
+        switch syncDiagnostics.storageMode {
+        case .cloudKit:
+            return syncDiagnostics.accountStatus == .available ? "checkmark.icloud" : "exclamationmark.icloud"
+        case .localFallback:
+            return "icloud.slash"
+        case .inMemoryFallback:
+            return "exclamationmark.triangle"
         }
+    }
+
+    private var syncIndicatorColor: Color {
+        switch syncDiagnostics.storageMode {
+        case .cloudKit:
+            return syncDiagnostics.accountStatus == .available ? .green : .orange
+        case .localFallback, .inMemoryFallback:
+            return .red
+        }
+    }
+
+    private var accountStatusLabel: String {
+        switch syncDiagnostics.accountStatus {
+        case .available:
+            return "可用"
+        case .noAccount:
+            return "未登录 iCloud"
+        case .restricted:
+            return "受限制"
+        case .temporarilyUnavailable:
+            return "暂时不可用"
+        case .couldNotDetermine:
+            return "无法判断"
+        @unknown default:
+            return "未知状态"
+        }
+    }
+
+    private var syncSecondaryLabel: String {
+        isSyncHealthy ? "后台自动同步" : "当前未处于可同步状态"
+    }
+
+    private var isSyncHealthy: Bool {
+        syncDiagnostics.storageMode == .cloudKit && syncDiagnostics.accountStatus == .available
+    }
+
+    private var diagnosticMessages: [String] {
+        var messages: [String] = []
+        if !isSyncHealthy {
+            messages.append("仅当存储模式为 CloudKit 且账号可用时，数据才会跨设备同步。")
+        }
+        if let startupMessage = syncDiagnostics.startupMessage, !startupMessage.isEmpty {
+            messages.append(startupMessage)
+        }
+        if let accountStatusMessage = syncDiagnostics.accountStatusMessage, !accountStatusMessage.isEmpty {
+            messages.append("账号检查失败：\(accountStatusMessage)")
+        }
+        return messages
     }
 }
