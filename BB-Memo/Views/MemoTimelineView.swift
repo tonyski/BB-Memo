@@ -10,16 +10,21 @@ import SwiftData
 
 /// BB 主页 — 时间线 + 标签侧栏
 struct MemoTimelineView: View {
-    @Query(sort: \Memo.createdAt, order: .reverse) private var allMemos: [Memo]
+    @Environment(\.modelContext) private var modelContext
 
     @State private var memoToEdit: Memo?
     @Binding var showSidebar: Bool
     @State private var selectedTag: Tag?
+    @State private var displayedMemos: [Memo] = []
+    @State private var loadedCount = 0
+    @State private var pinnedLoadedCount = 0
+    @State private var unpinnedLoadedCount = 0
+    @State private var pinnedExhausted = false
+    @State private var canLoadMore = true
+    @State private var isLoadingPage = false
+    @State private var totalMemoCount = 0
 
-    /// 过滤和排序后的 Memo
-    private var filteredMemos: [Memo] {
-        MemoFilter.apply(allMemos, tag: selectedTag)
-    }
+    private let pageSize = 40
 
     var body: some View {
         ZStack {
@@ -63,10 +68,21 @@ struct MemoTimelineView: View {
         #if os(iOS)
         .navigationBarHidden(true)
         #endif
-        .sheet(item: $memoToEdit) { memo in
+        .sheet(item: $memoToEdit, onDismiss: resetAndReload) { memo in
             MemoEditorView(memo: memo)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+        .onAppear {
+            if displayedMemos.isEmpty {
+                resetAndReload()
+            }
+        }
+        .onChange(of: selectedTag?.persistentModelID) { _, _ in
+            resetAndReload()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .memoDataChanged)) { _ in
+            resetAndReload()
         }
     }
 
@@ -112,7 +128,7 @@ struct MemoTimelineView: View {
                 }
                 
                 if selectedTag == nil {
-                    Text("\(allMemos.count) 条记录")
+                    Text("\(totalMemoCount) 条记录")
                         .font(.system(size: 10, weight: .regular, design: AppTheme.Layout.fontDesign))
                         .foregroundStyle(.secondary)
                 }
@@ -145,17 +161,25 @@ struct MemoTimelineView: View {
                 // 顶部间距（动态避让 TopBar）
                 Spacer().frame(height: 60)
 
-                if filteredMemos.isEmpty {
+                if displayedMemos.isEmpty && !isLoadingPage {
                     emptyState
                 } else {
-                    ForEach(filteredMemos, id: \.persistentModelID) { memo in
+                    ForEach(displayedMemos, id: \.persistentModelID) { memo in
                         MemoCardView(memo: memo, onEdit: {
                             memoToEdit = memo
                         }, onTagTap: { tag in
                             selectedTag = tag
                         })
                         .memoCardStyle()
+                        .onAppear {
+                            loadNextPageIfNeeded(current: memo)
+                        }
                     }
+                }
+
+                if isLoadingPage {
+                    ProgressView()
+                        .padding(.top, 8)
                 }
 
                 // 底部间距
@@ -180,5 +204,105 @@ struct MemoTimelineView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 140)
+    }
+
+    // MARK: - Paging
+
+    private func resetAndReload() {
+        displayedMemos = []
+        loadedCount = 0
+        pinnedLoadedCount = 0
+        unpinnedLoadedCount = 0
+        pinnedExhausted = false
+        canLoadMore = true
+        isLoadingPage = false
+        refreshTotalCount()
+        loadNextPage()
+    }
+
+    private func loadNextPageIfNeeded(current memo: Memo) {
+        guard canLoadMore, !isLoadingPage else { return }
+        guard let idx = displayedMemos.firstIndex(where: {
+            $0.persistentModelID == memo.persistentModelID
+        }) else { return }
+        if idx >= displayedMemos.count - 8 {
+            loadNextPage()
+        }
+    }
+
+    private func loadNextPage() {
+        guard canLoadMore, !isLoadingPage else { return }
+        isLoadingPage = true
+        defer { isLoadingPage = false }
+
+        if let tag = selectedTag {
+            let sorted = sortMemos(tag.memos)
+            let page = Array(sorted.dropFirst(loadedCount).prefix(pageSize))
+            displayedMemos.append(contentsOf: page)
+            loadedCount += page.count
+            canLoadMore = page.count == pageSize && loadedCount < sorted.count
+            return
+        }
+
+        do {
+            var page: [Memo] = []
+            var remaining = pageSize
+
+            if !pinnedExhausted {
+                var pinnedDescriptor = FetchDescriptor<Memo>(
+                    predicate: #Predicate<Memo> { $0.isPinned == true },
+                    sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
+                )
+                pinnedDescriptor.fetchOffset = pinnedLoadedCount
+                pinnedDescriptor.fetchLimit = remaining
+
+                let pinnedPage = try modelContext.fetch(pinnedDescriptor)
+                page.append(contentsOf: pinnedPage)
+                pinnedLoadedCount += pinnedPage.count
+                remaining -= pinnedPage.count
+                if pinnedPage.count < pageSize {
+                    pinnedExhausted = true
+                }
+            }
+
+            if remaining > 0 {
+                var unpinnedDescriptor = FetchDescriptor<Memo>(
+                    predicate: #Predicate<Memo> { $0.isPinned == false },
+                    sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
+                )
+                unpinnedDescriptor.fetchOffset = unpinnedLoadedCount
+                unpinnedDescriptor.fetchLimit = remaining
+
+                let unpinnedPage = try modelContext.fetch(unpinnedDescriptor)
+                page.append(contentsOf: unpinnedPage)
+                unpinnedLoadedCount += unpinnedPage.count
+            }
+
+            displayedMemos.append(contentsOf: page)
+            canLoadMore = displayedMemos.count < totalMemoCount
+        } catch {
+            canLoadMore = false
+        }
+    }
+
+    private func refreshTotalCount() {
+        guard selectedTag == nil else {
+            totalMemoCount = 0
+            return
+        }
+        do {
+            let descriptor = FetchDescriptor<Memo>()
+            totalMemoCount = try modelContext.fetchCount(descriptor)
+        } catch {
+            totalMemoCount = displayedMemos.count
+        }
+    }
+
+    private func sortMemos(_ memos: [Memo]) -> [Memo] {
+        memos.sorted { lhs, rhs in
+            if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+            return lhs.persistentModelID.hashValue > rhs.persistentModelID.hashValue
+        }
     }
 }

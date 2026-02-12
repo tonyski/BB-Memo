@@ -58,7 +58,12 @@ struct ContentView: View {
 #if os(macOS)
 struct MacContentView: View {
     @Query(sort: \Memo.createdAt, order: .reverse) private var memos: [Memo]
-    @Query(sort: \Tag.name) private var allTags: [Tag]
+    @Query(
+        sort: [
+            SortDescriptor(\Tag.usageCount, order: .reverse),
+            SortDescriptor(\Tag.name, order: .forward)
+        ]
+    ) private var allTags: [Tag]
 
     @Binding var showComposer: Bool
     @State private var selectedTag: Tag?
@@ -135,7 +140,7 @@ struct MacContentView: View {
                         ForEach(allTags) { tag in
                             MacSidebarRow(
                                 title: tag.name,
-                                count: tag.memos.count,
+                                count: tag.usageCount,
                                 isSelected: selectedTag?.persistentModelID == tag.persistentModelID,
                                 icon: "#",
                                 isTag: true

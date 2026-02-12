@@ -31,10 +31,12 @@ struct MemoCardView: View {
         .confirmationDialog("确定删除这条思考？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("删除", role: .destructive) {
                 withAnimation {
+                    TagUsageCounter.decrement(memo.tags)
                     NotificationManager.cancelReminder(
                         memoID: memo.persistentModelID.hashValue.description
                     )
                     modelContext.delete(memo)
+                    NotificationCenter.default.post(name: .memoDataChanged, object: nil)
                 }
             }
         }

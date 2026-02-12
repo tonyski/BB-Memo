@@ -10,13 +10,18 @@ import SwiftData
 
 /// 左侧滑出标签筛选菜单
 struct TagSidebarView: View {
-    @Query(sort: \Tag.name) private var allTags: [Tag]
+    @Query(
+        sort: [
+            SortDescriptor(\Tag.usageCount, order: .reverse),
+            SortDescriptor(\Tag.name, order: .forward)
+        ]
+    ) private var allTags: [Tag]
     @Binding var selectedTag: Tag?
     @Binding var isOpen: Bool
     @State private var showSettings = false
 
     private let sidebarWidth: CGFloat = 280
-
+    
     var body: some View {
         ZStack(alignment: .leading) {
             // 半透明背景遮罩 + 模糊
@@ -57,10 +62,11 @@ struct TagSidebarView: View {
             // 头部区域
             headerSection
 
-            // 标签列表
+            Divider()
+
+            // 固定滚动区域，仅中间列表滚动
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    // "全部 MEMO" 按钮
+                LazyVStack(alignment: .leading, spacing: 2) {
                     SidebarItemView(
                         title: "全部思考",
                         icon: selectedTag == nil ? "tray.full.fill" : "tray.full",
@@ -71,13 +77,12 @@ struct TagSidebarView: View {
                         }
                     )
 
-                    // 标签列表
                     ForEach(allTags) { tag in
                         SidebarItemView(
                             title: tag.name,
                             icon: "#",
                             isTag: true,
-                            count: tag.memos.count,
+                            count: tag.usageCount,
                             isSelected: selectedTag?.persistentModelID == tag.persistentModelID,
                             action: {
                                 selectedTag = tag
@@ -86,15 +91,11 @@ struct TagSidebarView: View {
                         )
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 8)
             }
+            .frame(maxHeight: .infinity, alignment: .top)
             .scrollIndicators(.hidden)
-
-            Spacer()
-
-            // 底部工具
-            footerSection
         }
         .frame(width: sidebarWidth)
     }
@@ -107,39 +108,37 @@ struct TagSidebarView: View {
     }
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("BB Memo")
-                .font(.system(size: 28, weight: .bold, design: AppTheme.Layout.fontDesign))
-                .foregroundStyle(AppTheme.brandGradient)
-            Text("\(allTags.count) 个标签分类")
-                .font(.system(size: 11, design: AppTheme.Layout.fontDesign))
-                .foregroundStyle(.secondary)
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("BB Memo")
+                    .font(.system(size: 28, weight: .bold, design: AppTheme.Layout.fontDesign))
+                    .foregroundStyle(AppTheme.brandGradient)
+                Text("\(allTags.count) 个标签分类")
+                    .font(.system(size: 11, design: AppTheme.Layout.fontDesign))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                showSettings = true
+                HapticFeedback.light.play()
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+                    .background(.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 20)
         .padding(.top, safeAreaInsets.top + 24)
-        .padding(.bottom, 12)
+        .padding(.bottom, 10)
     }
 
     @Environment(\.safeAreaInsets) private var safeAreaInsets
-
-    private var footerSection: some View {
-        Button {
-            showSettings = true
-            HapticFeedback.light.play()
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 16))
-                Text("偏好设置")
-                    .font(.system(size: 15, weight: .medium, design: AppTheme.Layout.fontDesign))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-            .background(.secondary.opacity(0.05))
-        }
-        .buttonStyle(.plain)
-    }
 }
 
 // MARK: - Sidebar Item View Component
@@ -154,23 +153,23 @@ struct SidebarItemView: View {
     
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 // Icon
                 Group {
                     if isTag {
                         Text(icon)
-                            .font(.system(size: 18, weight: .bold, design: AppTheme.Layout.fontDesign))
+                            .font(.system(size: 16, weight: .bold, design: AppTheme.Layout.fontDesign))
                     } else {
                         Image(systemName: icon)
-                            .font(.system(size: 18))
+                            .font(.system(size: 16))
                     }
                 }
                 .foregroundStyle(isSelected ? AppTheme.brandAccent : Color.secondary.opacity(0.5))
-                .frame(width: 24)
+                .frame(width: 20)
                 
                 // Title
                 Text(title)
-                    .font(.system(size: 16, weight: isSelected ? .semibold : .regular, design: AppTheme.Layout.fontDesign))
+                    .font(.system(size: 14, weight: isSelected ? .semibold : .regular, design: AppTheme.Layout.fontDesign))
                     .foregroundStyle(isSelected ? .primary : .secondary)
                     .lineLimit(1)
                 
@@ -179,18 +178,18 @@ struct SidebarItemView: View {
                 // Count (if available)
                 if let count = count {
                     Text("\(count)")
-                        .font(.system(size: 12, weight: .medium, design: AppTheme.Layout.fontDesign))
-                        .padding(.horizontal, 8).padding(.vertical, 2)
+                        .font(.system(size: 11, weight: .medium, design: AppTheme.Layout.fontDesign))
+                        .padding(.horizontal, 7).padding(.vertical, 2)
                         .background(isSelected ? AppTheme.brandAccent : AppTheme.brandAccent.opacity(0.1))
                         .foregroundStyle(isSelected ? .white : AppTheme.brandAccent)
                         .clipShape(Capsule())
                 }
             }
-            .padding(.horizontal, 16).padding(.vertical, 12)
+            .padding(.horizontal, 12).padding(.vertical, 9)
             .background(isSelected ? AppTheme.brandAccent.opacity(0.15) : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 10)
                     .stroke(AppTheme.brandAccent.opacity(isSelected ? 0.1 : 0), lineWidth: 1)
             )
             .foregroundStyle(isSelected ? .primary : .secondary)

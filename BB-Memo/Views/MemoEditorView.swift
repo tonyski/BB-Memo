@@ -19,15 +19,47 @@ struct MemoEditorView: View {
 
     @State private var content = ""
     @State private var reminderDate: Date?
-    @State private var showReminderPicker = false
     @State private var aiSuggestions: [TagSuggestion] = []
     @State private var debounceTask: Task<Void, Never>?
+    @State private var selectedTagNames: Set<String> = []
+    @State private var activeSheet: ActiveSheet?
 
     @FocusState private var isFocused: Bool
 
     private var isEditing: Bool { memo != nil }
     private var trimmedContent: String {
         content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    private var reminderButtonTitle: String {
+        let value = reminderDate?.formatted(.dateTime.month().day().hour().minute()) ?? "未设置"
+        return "设置提醒 · \(value)"
+    }
+    private var reminderIconName: String {
+        reminderDate == nil ? "bell.badge" : "bell.fill"
+    }
+    private var reminderIconColor: Color {
+        reminderDate == nil ? AppTheme.brandAccent : AppTheme.warning
+    }
+    private enum ActiveSheet: Identifiable {
+        case reminder
+        case tagPicker
+
+        var id: Int {
+            switch self {
+            case .reminder: 0
+            case .tagPicker: 1
+            }
+        }
+    }
+    private var mergedTagSuggestions: [TagSuggestion] {
+        var result = aiSuggestions
+        let existingLower = Set(aiSuggestions.map { $0.name.lowercased() })
+        let extras = selectedTagNames
+            .filter { !existingLower.contains($0.lowercased()) }
+            .sorted()
+            .map { TagSuggestion(name: $0, isAutoAdded: false) }
+        result.append(contentsOf: extras)
+        return result
     }
 
     var body: some View {
@@ -40,7 +72,14 @@ struct MemoEditorView: View {
                         .scrollContentBackground(.hidden)
                         .focused($isFocused)
                         .onChange(of: content) { _, newValue in
-                            EditorHelper.triggerAIAnalysis(newValue, allTags: allTags, debounceTask: &debounceTask, suggestions: $aiSuggestions)
+                            EditorHelper.triggerAIAnalysis(
+                                newValue,
+                                allTags: allTags,
+                                debounceTask: &debounceTask,
+                                suggestions: $aiSuggestions,
+                                selectedTagNames: $selectedTagNames,
+                                autoSelectAISuggestions: !isEditing
+                            )
                         }
 
                     if content.isEmpty {
@@ -57,40 +96,24 @@ struct MemoEditorView: View {
 
                 Spacer()
 
-                if !aiSuggestions.isEmpty {
-                    AISuggestionBar(suggestions: aiSuggestions) { tag in
-                        EditorHelper.insertTag(tag, into: &content, suggestions: &aiSuggestions)
+                if !mergedTagSuggestions.isEmpty {
+                    AISuggestionBar(
+                        suggestions: mergedTagSuggestions,
+                        selectedTagNames: selectedTagNames
+                    ) { tag in
+                        EditorHelper.toggleTag(tag.name, selectedTagNames: &selectedTagNames)
                         HapticFeedback.light.play()
+                    } onAddCustom: {
+                        activeSheet = .tagPicker
                     }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(nil, value: selectedTagNames)
                 }
 
-                if let date = reminderDate {
-                    ReminderBanner(date: date) {
-                        reminderDate = nil
-                        HapticFeedback.medium.play()
-                    }
-                }
-
-                EditorToolbar(
-                    reminderDate: reminderDate,
-                    onHashtag: {
-                        if !content.isEmpty && !content.hasSuffix(" ") { content += " " }
-                        content += "#"
-                        HapticFeedback.light.play()
-                    },
-                    onReminder: {
-                        showReminderPicker = true
-                        HapticFeedback.light.play()
-                    }
-                ) {
-                    if let memo = memo {
-                        Text(memo.createdAt, style: .date)
-                            .font(.system(size: 11, weight: .regular, design: AppTheme.Layout.fontDesign))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                .background(Color.secondary.opacity(0.05))
+                reminderButton
+                .buttonStyle(.plain)
+                .padding(.horizontal, AppTheme.Layout.screenPadding)
+                .padding(.top, mergedTagSuggestions.isEmpty ? 8 : 10)
+                .padding(.bottom, 10)
             }
             .background(AppTheme.cardBackground)
             .navigationTitle(isEditing ? "编辑思考" : "新思考")
@@ -109,13 +132,31 @@ struct MemoEditorView: View {
                         .disabled(trimmedContent.isEmpty)
                 }
             }
-            .sheet(isPresented: $showReminderPicker) {
-                ReminderPickerView(selectedDate: $reminderDate)
+            .sheet(item: $activeSheet) { sheet in
+                switch sheet {
+                case .reminder:
+                    ReminderPickerView(selectedDate: $reminderDate)
+                case .tagPicker:
+                    TagPickerSheet(
+                        allTags: allTags,
+                        selectedTagNames: selectedTagNames,
+                        onToggle: { name in
+                            toggleTagByName(name)
+                        },
+                        onCreate: { name in
+                            addCustomTag(named: name)
+                        }
+                    )
+                    #if os(iOS)
+                    .presentationDetents([.height(360)])
+                    #endif
+                }
             }
             .onAppear {
                 if let memo = memo {
                     content = memo.content
                     reminderDate = memo.reminderDate
+                    selectedTagNames = Set(memo.tags.map(\.name))
                 }
                 // 延迟聚焦以确保动画流畅
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -133,24 +174,26 @@ struct MemoEditorView: View {
         HapticFeedback.medium.play()
 
         let tags = MemoTagResolver.resolveTags(
-            from: trimmedContent, 
-            allTags: allTags, 
-            suggestions: aiSuggestions,
+            selectedNames: selectedTagNames,
+            allTags: allTags,
             context: modelContext
         )
         let memoID: String
 
         if let memo = memo {
             // 更新已有
+            let oldTags = memo.tags
             memo.content = trimmedContent
             memo.updatedAt = .now
             memo.reminderDate = reminderDate
             memo.tags = tags
+            TagUsageCounter.applyDelta(oldTags: oldTags, newTags: tags)
             memoID = memo.persistentModelID.hashValue.description
         } else {
             // 新建
             let newMemo = Memo(content: trimmedContent, reminderDate: reminderDate, tags: tags)
             modelContext.insert(newMemo)
+            TagUsageCounter.increment(tags)
             memoID = newMemo.persistentModelID.hashValue.description
         }
 
@@ -160,6 +203,53 @@ struct MemoEditorView: View {
             NotificationManager.scheduleReminder(memoID: memoID, content: trimmedContent, at: date)
         }
 
+        NotificationCenter.default.post(name: .memoDataChanged, object: nil)
         dismiss()
+    }
+
+    private func addCustomTag(named raw: String) {
+        let canonicalName = canonicalTagName(for: raw)
+        guard !canonicalName.isEmpty else { return }
+        selectedTagNames.insert(canonicalName)
+        if aiSuggestions.firstIndex(where: { $0.name.caseInsensitiveCompare(canonicalName) == .orderedSame }) == nil {
+            aiSuggestions.insert(TagSuggestion(name: canonicalName, isAutoAdded: false), at: 0)
+        }
+    }
+
+    private func toggleTagByName(_ raw: String) {
+        let canonicalName = canonicalTagName(for: raw)
+        guard !canonicalName.isEmpty else { return }
+        EditorHelper.toggleTag(canonicalName, selectedTagNames: &selectedTagNames)
+    }
+
+    private func canonicalTagName(for raw: String) -> String {
+        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard !normalized.isEmpty else { return "" }
+        return allTags.first(where: { $0.name.caseInsensitiveCompare(normalized) == .orderedSame })?.name ?? normalized
+    }
+
+    private var reminderButton: some View {
+        Button {
+            activeSheet = .reminder
+            HapticFeedback.light.play()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: reminderIconName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(reminderIconColor)
+                Text(reminderButtonTitle)
+                    .font(.system(size: 14, weight: .regular, design: AppTheme.Layout.fontDesign))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
     }
 }

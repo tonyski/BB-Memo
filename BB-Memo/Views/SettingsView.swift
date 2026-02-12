@@ -269,6 +269,7 @@ struct SettingsView: View {
                     updatedAt: fMemo.createdAt,
                     tags: tags
                 ))
+                TagUsageCounter.increment(tags)
             }
 
             try modelContext.save()

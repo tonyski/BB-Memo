@@ -42,6 +42,7 @@ struct BB_MemoApp: App {
             ContentView()
                 .task {
                     _ = await NotificationManager.requestAuthorization()
+                    TagUsageCounter.backfillIfNeeded(container: sharedModelContainer)
                 }
                 #if os(macOS)
                 .frame(minWidth: 700, minHeight: 500)

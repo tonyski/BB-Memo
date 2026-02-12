@@ -8,41 +8,45 @@
 import SwiftUI
 import SwiftData
 
-// MARK: - AI 标签建议栏
-
 struct AISuggestionBar: View {
     let suggestions: [TagSuggestion]
+    let selectedTagNames: Set<String>
     var onAction: (TagSuggestion) -> Void
+    var onAddCustom: () -> Void
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 12))
-                    .foregroundStyle(AppTheme.brandAccent.opacity(0.8))
+                Button(action: onAddCustom) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus")
+                        Text("添加")
+                    }
+                    .font(.system(size: 12, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(AppTheme.brandAccent.opacity(0.12))
+                    .foregroundStyle(AppTheme.brandAccent)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+
                 ForEach(suggestions) { suggestion in
+                    let isSelected = selectedTagNames.contains(suggestion.name)
                     Button { onAction(suggestion) } label: {
-                        HStack(spacing: 4) {
-                            if suggestion.isAutoAdded && !suggestion.isExcluded {
-                                Image(systemName: "checkmark").font(.system(size: 8, weight: .bold))
-                            }
-                            Text("#\(suggestion.name)")
-                        }
+                        Text("#\(suggestion.name)")
                         .font(.system(size: 13, weight: .semibold, design: AppTheme.Layout.fontDesign))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .background(
-                            suggestion.isExcluded 
-                            ? Color.secondary.opacity(0.1) 
-                            : (suggestion.isAutoAdded ? AppTheme.brandAccent.opacity(0.15) : AppTheme.brandAccent.opacity(0.08))
+                            isSelected
+                            ? AppTheme.brandAccent.opacity(0.15)
+                            : Color.secondary.opacity(0.1)
                         )
                         .foregroundStyle(
-                            suggestion.isExcluded 
-                            ? Color.secondary 
-                            : AppTheme.brandAccent
+                            isSelected ? AppTheme.brandAccent : Color.secondary
                         )
                         .clipShape(Capsule())
-                        .strikethrough(suggestion.isExcluded)
                     }
                     .buttonStyle(.plain)
                 }
@@ -51,6 +55,173 @@ struct AISuggestionBar: View {
             .padding(.vertical, 10)
         }
         Divider().opacity(0.5)
+    }
+}
+
+struct TagPickerSheet: View {
+    let allTags: [Tag]
+    let selectedTagNames: Set<String>
+    var onToggle: (String) -> Void
+    var onCreate: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var input = ""
+
+    private var normalizedInput: String {
+        input.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+    }
+
+    private var frequentTags: [Tag] {
+        allTags
+            .sorted { lhs, rhs in
+                let lCount = lhs.usageCount
+                let rCount = rhs.usageCount
+                if lCount != rCount { return lCount > rCount }
+                return lhs.name.localizedCompare(rhs.name) == .orderedAscending
+            }
+            .prefix(12)
+            .map { $0 }
+    }
+
+    private var selectedNamesSorted: [String] {
+        selectedTagNames.sorted()
+    }
+
+    private var inputFieldBackgroundColor: Color {
+        #if os(macOS)
+        return Color.secondary.opacity(0.12)
+        #else
+        return Color.secondary.opacity(0.08)
+        #endif
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 8) {
+                        TextField("输入标签名，例如：工作", text: $input)
+                            .autocorrectionDisabled()
+                            #if os(iOS)
+                            .textInputAutocapitalization(.never)
+                            .submitLabel(.done)
+                            #endif
+                            .onSubmit {
+                                submitInputTag()
+                            }
+                            .font(.system(.body, design: AppTheme.Layout.fontDesign))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(inputFieldBackgroundColor)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                        Button {
+                            submitInputTag()
+                        } label: {
+                            Text("添加")
+                                .font(.system(size: 14, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(AppTheme.brandAccent)
+                        .disabled(normalizedInput.isEmpty)
+                    }
+
+                    if !selectedNamesSorted.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("已选标签")
+                                .font(.system(size: 12, weight: .medium, design: AppTheme.Layout.fontDesign))
+                                .foregroundStyle(.secondary)
+
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 84), spacing: 8)],
+                                alignment: .leading,
+                                spacing: 8
+                            ) {
+                                ForEach(selectedNamesSorted, id: \.self) { name in
+                                    Button {
+                                        onToggle(name)
+                                    } label: {
+                                        Text("#\(name)")
+                                            .font(.system(size: 13, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 6)
+                                            .background(AppTheme.brandAccent.opacity(0.15))
+                                            .foregroundStyle(AppTheme.brandAccent)
+                                            .clipShape(Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .padding(12)
+                        .background(Color.secondary.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    if !frequentTags.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("常用标签")
+                                .font(.system(size: 12, weight: .medium, design: AppTheme.Layout.fontDesign))
+                                .foregroundStyle(.secondary)
+
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 84), spacing: 8)],
+                                alignment: .leading,
+                                spacing: 8
+                            ) {
+                                ForEach(frequentTags) { tag in
+                                    let isSelected = selectedTagNames.contains(tag.name)
+                                    Button {
+                                        onToggle(tag.name)
+                                    } label: {
+                                        Text("#\(tag.name) \(tag.usageCount)")
+                                            .font(.system(size: 13, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 6)
+                                            .background(
+                                                isSelected
+                                                ? AppTheme.brandAccent.opacity(0.15)
+                                                : Color.secondary.opacity(0.1)
+                                            )
+                                            .foregroundStyle(
+                                                isSelected ? AppTheme.brandAccent : Color.secondary
+                                            )
+                                            .clipShape(Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        .padding(12)
+                        .background(Color.secondary.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+                .padding(.horizontal, AppTheme.Layout.screenPadding)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+            }
+            .navigationTitle("添加标签")
+            #if os(macOS)
+            .frame(minWidth: 560, minHeight: 460)
+            #endif
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+    private func submitInputTag() {
+        guard !normalizedInput.isEmpty else { return }
+        onCreate(normalizedInput)
+        input = ""
     }
 }
 
@@ -87,13 +258,13 @@ struct ReminderBanner: View {
 
 struct EditorToolbar<Trailing: View>: View {
     var reminderDate: Date?
-    var onHashtag: () -> Void
+    var onHashtag: (() -> Void)?
     var onReminder: () -> Void
     var trailing: Trailing
 
     init(
         reminderDate: Date? = nil,
-        onHashtag: @escaping () -> Void,
+        onHashtag: (() -> Void)? = nil,
         onReminder: @escaping () -> Void,
         @ViewBuilder trailing: () -> Trailing = { EmptyView() }
     ) {
@@ -104,52 +275,68 @@ struct EditorToolbar<Trailing: View>: View {
     }
 
     var body: some View {
-        HStack(spacing: 28) {
-            Button(action: onHashtag) {
-                Image(systemName: "number")
-                    .font(.system(size: 20))
-                    .foregroundStyle(AppTheme.brandAccent.opacity(0.8))
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                if let onHashtag {
+                    toolbarButton(
+                        title: "标签",
+                        icon: "number",
+                        tint: AppTheme.brandAccent.opacity(0.85),
+                        action: onHashtag
+                    )
+                }
+
+                toolbarButton(
+                    title: reminderDate == nil ? "添加提醒" : "修改提醒",
+                    icon: reminderDate == nil ? "bell" : "bell.fill",
+                    tint: reminderDate == nil ? AppTheme.brandAccent.opacity(0.85) : AppTheme.warning,
+                    action: onReminder
+                )
             }
-            .buttonStyle(.plain)
-            
-            Button(action: onReminder) {
-                Image(systemName: reminderDate == nil ? "bell" : "bell.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(reminderDate == nil ? AppTheme.brandAccent.opacity(0.8) : AppTheme.warning)
-            }
-            .buttonStyle(.plain)
-            
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+            .background(Color.secondary.opacity(0.10), in: Capsule())
+
             Spacer()
             trailing
         }
         .padding(.horizontal, AppTheme.Layout.screenPadding + 4)
         .padding(.vertical, 14)
     }
+
+    private func toolbarButton(
+        title: String,
+        icon: String,
+        tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: AppTheme.Layout.fontDesign))
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background(Color.secondary.opacity(0.10), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 // MARK: - 标签解析工具
 
 enum MemoTagResolver {
-    /// 从文本中解析标签名，匹配已有 Tag 或创建新 Tag
+    /// 根据选中的标签名，匹配已有 Tag 或创建新 Tag
     static func resolveTags(
-        from text: String, 
-        allTags: [Tag], 
-        suggestions: [TagSuggestion], 
+        selectedNames: Set<String>,
+        allTags: [Tag],
         context: ModelContext
     ) -> [Tag] {
-        // 1. 显式提取 # 标签
-        let explicitNames = TagExtractor.extractHashtags(from: text)
-        
-        // 2. 自动发现建议标签 (仅包含未被排除的自动添加项)
-        let autoNames = suggestions
-            .filter { $0.isAutoAdded && !$0.isExcluded }
-            .map { $0.name }
-        
-        // 3. 合并去重（保持用户书写顺序）
-        var seen = Set<String>()
-        let combinedNames = (explicitNames + autoNames).filter { seen.insert($0).inserted }
-        
-        return combinedNames.map { name in
+        let sortedNames = selectedNames.sorted()
+        return sortedNames.map { name in
             if let existing = allTags.first(where: { $0.name == name }) {
                 return existing
             }
@@ -163,22 +350,21 @@ enum MemoTagResolver {
 // MARK: - 编辑器共享逻辑
 
 enum EditorHelper {
-    /// 在文本末尾插入标签
-    static func insertTag(_ suggestion: TagSuggestion, into content: inout String, suggestions: inout [TagSuggestion]) {
-        let name = suggestion.name
-        if !content.contains("#\(name)") {
-            if !content.hasSuffix(" ") && !content.isEmpty { content += " " }
-            content += "#\(name) "
+    static func toggleTag(_ name: String, selectedTagNames: inout Set<String>) {
+        if selectedTagNames.contains(name) {
+            selectedTagNames.remove(name)
+        } else {
+            selectedTagNames.insert(name)
         }
-        suggestions.removeAll { $0.name == name }
     }
 
-    /// 防抖触发 AI 标签分析
     static func triggerAIAnalysis(
         _ text: String,
         allTags: [Tag],
         debounceTask: inout Task<Void, Never>?,
-        suggestions: Binding<[TagSuggestion]>
+        suggestions: Binding<[TagSuggestion]>,
+        selectedTagNames: Binding<Set<String>>,
+        autoSelectAISuggestions: Bool
     ) {
         debounceTask?.cancel()
         debounceTask = Task {
@@ -186,7 +372,16 @@ enum EditorHelper {
             guard !Task.isCancelled else { return }
             let names = allTags.map(\.name)
             let result = TagExtractor.suggestTags(from: text, existingTagNames: names)
-            await MainActor.run { suggestions.wrappedValue = result }
+            await MainActor.run {
+                var selected = selectedTagNames.wrappedValue
+                if autoSelectAISuggestions && selected.isEmpty {
+                    for suggestion in result where suggestion.isAutoAdded {
+                        selected.insert(suggestion.name)
+                    }
+                }
+                selectedTagNames.wrappedValue = selected
+                suggestions.wrappedValue = result
+            }
         }
     }
 }
