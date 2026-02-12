@@ -10,17 +10,18 @@ import SwiftData
 
 @Model
 final class Memo {
-    var content: String
-    var createdAt: Date
-    var updatedAt: Date
-    var isPinned: Bool
+    var content: String = ""
+    var createdAt: Date = Foundation.Date.now
+    var updatedAt: Date = Foundation.Date.now
+    var isPinned: Bool = false
     var reminderDate: Date?
 
     @Relationship(inverse: \Tag.memos)
-    var tags: [Tag]
+    var tags: [Tag]?
     
     /// 判断内容是否为长文本
     var isLong: Bool { content.count > 180 }
+    var tagsList: [Tag] { tags ?? [] }
     /// 稳定提醒标识（避免使用 hashValue 导致重启后不一致）
     var reminderIdentifier: String { String(describing: persistentModelID) }
 

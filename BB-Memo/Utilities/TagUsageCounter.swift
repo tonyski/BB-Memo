@@ -58,7 +58,12 @@ enum TagUsageCounter {
         let tags = try context.fetch(FetchDescriptor<Tag>())
         var hasChanges = false
         for tag in tags {
-            let actual = tag.memos.count
+            let normalized = Tag.normalize(tag.name).lowercased()
+            if tag.normalizedName != normalized {
+                tag.normalizedName = normalized
+                hasChanges = true
+            }
+            let actual = tag.memosList.count
             if tag.usageCount != actual {
                 tag.usageCount = actual
                 hasChanges = true

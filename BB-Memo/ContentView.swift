@@ -28,7 +28,7 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(AppTheme.onBrandAccent)
                             .frame(width: 54, height: 54)
                             .background(AppTheme.brandAccent)
                             .clipShape(Circle())

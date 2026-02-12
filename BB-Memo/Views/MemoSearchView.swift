@@ -15,15 +15,17 @@ struct MemoSearchView: View {
 
     @Binding var selectedTag: Tag?
     @State private var searchText = ""
+    @State private var debouncedSearchText = ""
+    @State private var debounceTask: Task<Void, Never>?
     @State private var memoToEdit: Memo?
     @State private var selectedTimeFilter: MemoTimeFilter = .all
     @FocusState private var isFocused: Bool
 
     private var filteredMemos: [Memo] {
         // 未输入关键词时不展示内容
-        guard !searchText.isEmpty else { return [] }
+        guard !debouncedSearchText.isEmpty else { return [] }
 
-        var result = MemoFilter.apply(memos, searchText: searchText)
+        var result = MemoFilter.apply(memos, searchText: debouncedSearchText)
 
         // 时间筛选
         if let start = selectedTimeFilter.startDate {
@@ -130,6 +132,26 @@ struct MemoSearchView: View {
         .sheet(item: $memoToEdit) { memo in
             MemoEditorSheetView(memo: memo)
         }
-        .onAppear { isFocused = true }
+        .onAppear {
+            isFocused = true
+            debouncedSearchText = searchText
+        }
+        .onChange(of: searchText) { _, newValue in
+            debounceTask?.cancel()
+            if newValue.isEmpty {
+                debouncedSearchText = ""
+                return
+            }
+            debounceTask = Task {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    debouncedSearchText = newValue
+                }
+            }
+        }
+        .onDisappear {
+            debounceTask?.cancel()
+        }
     }
 }

@@ -78,9 +78,7 @@ struct MemoEditorView: View {
                                 newValue,
                                 allTags: allTags,
                                 debounceTask: &debounceTask,
-                                suggestions: $aiSuggestions,
-                                selectedTagNames: $selectedTagNames,
-                                autoSelectAISuggestions: !isEditing
+                                suggestions: $aiSuggestions
                             )
                         }
 
@@ -163,7 +161,7 @@ struct MemoEditorView: View {
                 if let memo = memo {
                     content = memo.content
                     reminderDate = memo.reminderDate
-                    selectedTagNames = Set(memo.tags.map(\.name))
+                    selectedTagNames = Set(memo.tagsList.map(\.name))
                 }
                 // 延迟聚焦以确保动画流畅
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -189,7 +187,7 @@ struct MemoEditorView: View {
 
         if let memo = memo {
             // 更新已有
-            let oldTags = memo.tags
+            let oldTags = memo.tagsList
             memo.content = trimmedContent
             memo.updatedAt = .now
             memo.reminderDate = reminderDate
@@ -239,10 +237,13 @@ struct MemoEditorView: View {
     }
 
     private func canonicalTagName(for raw: String) -> String {
-        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        let normalized = Tag.normalize(raw)
         guard !normalized.isEmpty else { return "" }
-        return allTags.first(where: { $0.name.caseInsensitiveCompare(normalized) == .orderedSame })?.name ?? normalized
+        let key = normalized.lowercased()
+        return allTags.first {
+            let existingKey = $0.normalizedName.isEmpty ? Tag.normalize($0.name).lowercased() : $0.normalizedName
+            return existingKey == key
+        }?.name ?? normalized
     }
 
     private var reminderButton: some View {

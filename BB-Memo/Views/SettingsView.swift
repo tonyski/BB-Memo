@@ -15,7 +15,7 @@ struct SettingsView: View {
     @Query private var tags: [Tag]
 
     @State private var syncStatus: SyncStatus = .checking
-    @State private var lastSyncDate: Date?
+    @State private var lastStatusCheckDate: Date?
 
     @Environment(\.modelContext) private var modelContext
     @State private var isImporting = false
@@ -25,13 +25,13 @@ struct SettingsView: View {
 
     enum SyncStatus: Equatable {
         case checking
-        case synced
+        case available
         case notAvailable
 
         var label: String {
             switch self {
             case .checking: return "检查中..."
-            case .synced: return "iCloud 可用"
+            case .available: return "iCloud 可用"
             case .notAvailable: return "iCloud 不可用"
             }
         }
@@ -39,7 +39,7 @@ struct SettingsView: View {
         var icon: String {
             switch self {
             case .checking: return "arrow.triangle.2.circlepath"
-            case .synced: return "checkmark.icloud"
+            case .available: return "checkmark.icloud"
             case .notAvailable: return "icloud.slash"
             }
         }
@@ -47,10 +47,14 @@ struct SettingsView: View {
         var color: Color {
             switch self {
             case .checking: return .gray
-            case .synced: return .green
+            case .available: return .green
             case .notAvailable: return .red
             }
         }
+    }
+
+    private var lastLocalUpdateDate: Date? {
+        memos.map(\.updatedAt).max()
     }
 
     var body: some View {
@@ -146,10 +150,20 @@ struct SettingsView: View {
                     Text(syncStatus.label)
                         .font(.subheadline)
                         .fontWeight(.medium)
-                    if let date = lastSyncDate {
-                        Text("上次同步：\(date.formatted(.relative(presentation: .named)))")
+                    if syncStatus == .available {
+                        Text("CloudKit 已启用，数据后台异步同步")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                    }
+                    if let date = lastLocalUpdateDate {
+                        Text("最近本地更新：\(date.formatted(.relative(presentation: .named)))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let date = lastStatusCheckDate {
+                        Text("状态检查：\(date.formatted(.relative(presentation: .named)))")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
 
@@ -320,11 +334,11 @@ struct SettingsView: View {
 
     private func checkiCloudStatus() {
         syncStatus = .checking
+        lastStatusCheckDate = .now
 
         // 通过 ubiquityIdentityToken 检测 iCloud 账户可用性
         if FileManager.default.ubiquityIdentityToken != nil {
-            syncStatus = .synced
-            lastSyncDate = Date.now
+            syncStatus = .available
         } else {
             syncStatus = .notAvailable
         }

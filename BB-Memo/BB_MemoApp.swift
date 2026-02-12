@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import Foundation
 
 @main
 struct BB_MemoApp: App {
@@ -15,24 +16,42 @@ struct BB_MemoApp: App {
             Memo.self,
             Tag.self,
         ])
-        let modelConfiguration = ModelConfiguration(
+        let cloudConfiguration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .automatic
+        )
+        let localConfiguration = ModelConfiguration(
             schema: schema,
             isStoredInMemoryOnly: false
         )
+        let inMemoryConfiguration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            // 模型变更导致旧数据不兼容时，清除旧数据重试
-            let url = modelConfiguration.url
-            try? FileManager.default.removeItem(at: url)
-            // 同时清理 WAL/SHM
-            try? FileManager.default.removeItem(at: url.appendingPathExtension("wal"))
-            try? FileManager.default.removeItem(at: url.appendingPathExtension("shm"))
+            return try ModelContainer(for: schema, configurations: [cloudConfiguration])
+        } catch let cloudError {
             do {
-                return try ModelContainer(for: schema, configurations: [modelConfiguration])
-            } catch {
-                fatalError("Could not create ModelContainer: \(error)")
+                return try ModelContainer(for: schema, configurations: [localConfiguration])
+            } catch let localError {
+                // 模型变更导致旧数据不兼容时，清除旧数据重试（本地配置）
+                let url = localConfiguration.url
+                try? FileManager.default.removeItem(at: url)
+                try? FileManager.default.removeItem(at: url.appendingPathExtension("wal"))
+                try? FileManager.default.removeItem(at: url.appendingPathExtension("shm"))
+                do {
+                    return try ModelContainer(for: schema, configurations: [localConfiguration])
+                } catch let retryError {
+                    do {
+                        return try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
+                    } catch {
+                        fatalError(
+                            "Could not create ModelContainer. cloudError=\(cloudError), localError=\(localError), retryError=\(retryError), inMemoryError=\(error)"
+                        )
+                    }
+                }
             }
         }
     }()
@@ -41,8 +60,10 @@ struct BB_MemoApp: App {
         WindowGroup {
             ContentView()
                 .task {
-                    _ = await NotificationManager.requestAuthorization()
-                    TagUsageCounter.backfillIfNeeded(container: sharedModelContainer)
+                    DispatchQueue.global(qos: .utility).async {
+                        TagDeduplicator.mergeDuplicatesIfNeeded(container: sharedModelContainer)
+                        TagUsageCounter.backfillIfNeeded(container: sharedModelContainer)
+                    }
                 }
                 #if os(macOS)
                 .frame(minWidth: 700, minHeight: 500)

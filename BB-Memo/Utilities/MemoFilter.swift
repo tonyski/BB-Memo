@@ -32,12 +32,12 @@ enum MemoFilter {
 
     private static func matchesTag(_ memo: Memo, tag: Tag?) -> Bool {
         guard let tag else { return true }
-        return memo.tags.contains { $0.persistentModelID == tag.persistentModelID }
+        return memo.tagsList.contains { $0.persistentModelID == tag.persistentModelID }
     }
 
     private static func matchesSearch(_ memo: Memo, searchText: String) -> Bool {
         guard !searchText.isEmpty else { return true }
         return memo.content.localizedCaseInsensitiveContains(searchText)
-            || memo.tags.contains { $0.name.localizedCaseInsensitiveContains(searchText) }
+            || memo.tagsList.contains { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
 }

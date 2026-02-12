@@ -234,15 +234,30 @@ enum MemoTagResolver {
         allTags: [Tag],
         context: ModelContext
     ) -> [Tag] {
-        let sortedNames = selectedNames.sorted()
-        return sortedNames.map { name in
-            if let existing = allTags.first(where: { $0.name == name }) {
-                return existing
-            }
-            let tag = Tag(name: name)
-            context.insert(tag)
-            return tag
+        var existingByNormalized: [String: Tag] = [:]
+        for tag in allTags {
+            let key = tag.normalizedName.isEmpty ? Tag.normalize(tag.name).lowercased() : tag.normalizedName
+            existingByNormalized[key] = tag
         }
+
+        var resolved: [Tag] = []
+        var seen = Set<String>()
+        for rawName in selectedNames.sorted() {
+            let displayName = Tag.normalize(rawName)
+            guard !displayName.isEmpty else { continue }
+            let normalized = displayName.lowercased()
+            guard seen.insert(normalized).inserted else { continue }
+
+            if let existing = existingByNormalized[normalized] {
+                resolved.append(existing)
+            } else {
+                let tag = Tag(name: displayName)
+                context.insert(tag)
+                existingByNormalized[normalized] = tag
+                resolved.append(tag)
+            }
+        }
+        return resolved
     }
 }
 
@@ -261,9 +276,7 @@ enum EditorHelper {
         _ text: String,
         allTags: [Tag],
         debounceTask: inout Task<Void, Never>?,
-        suggestions: Binding<[TagSuggestion]>,
-        selectedTagNames: Binding<Set<String>>,
-        autoSelectAISuggestions: Bool
+        suggestions: Binding<[TagSuggestion]>
     ) {
         debounceTask?.cancel()
         debounceTask = Task {
@@ -272,13 +285,6 @@ enum EditorHelper {
             let names = allTags.map(\.name)
             let result = TagExtractor.suggestTags(from: text, existingTagNames: names)
             await MainActor.run {
-                var selected = selectedTagNames.wrappedValue
-                if autoSelectAISuggestions && selected.isEmpty {
-                    for suggestion in result where suggestion.isAutoAdded {
-                        selected.insert(suggestion.name)
-                    }
-                }
-                selectedTagNames.wrappedValue = selected
                 suggestions.wrappedValue = result
             }
         }

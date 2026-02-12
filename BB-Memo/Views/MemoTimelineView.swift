@@ -232,10 +232,10 @@ struct MemoTimelineView: View {
 
     private func loadNextPageIfNeeded(current memo: Memo) {
         guard paging.canLoadMore, !paging.isLoadingPage else { return }
-        guard let idx = displayedMemos.firstIndex(where: {
-            $0.persistentModelID == memo.persistentModelID
-        }) else { return }
-        if idx >= displayedMemos.count - 8 {
+        let triggerIndex = max(displayedMemos.count - 8, 0)
+        guard displayedMemos.indices.contains(triggerIndex) else { return }
+        let triggerMemoID = displayedMemos[triggerIndex].persistentModelID
+        if memo.persistentModelID == triggerMemoID {
             loadNextPage()
         }
     }
@@ -246,7 +246,7 @@ struct MemoTimelineView: View {
         defer { paging.isLoadingPage = false }
 
         if let tag = selectedTag {
-            let sorted = MemoFilter.sort(tag.memos)
+            let sorted = MemoFilter.sort(tag.memosList)
             let page = Array(sorted.dropFirst(paging.tagLoadedCount).prefix(pageSize))
             displayedMemos.append(contentsOf: page)
             paging.tagLoadedCount += page.count

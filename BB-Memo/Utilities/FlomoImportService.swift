@@ -58,9 +58,12 @@ enum FlomoImportService {
 
     private static func makeTagLookup(in context: ModelContext) throws -> [String: Tag] {
         let existingTags = try context.fetch(FetchDescriptor<Tag>())
-        return Dictionary(
-            uniqueKeysWithValues: existingTags.map { ($0.name.lowercased(), $0) }
-        )
+        var lookup: [String: Tag] = [:]
+        for tag in existingTags {
+            let key = tag.normalizedName.isEmpty ? Tag.normalize(tag.name).lowercased() : tag.normalizedName
+            lookup[key] = tag
+        }
+        return lookup
     }
 
     private static func resolveTags(
@@ -72,7 +75,7 @@ enum FlomoImportService {
         var seen = Set<String>()
 
         for name in names {
-            let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedName = Tag.normalize(name)
             guard !normalizedName.isEmpty else { continue }
             let key = normalizedName.lowercased()
             guard seen.insert(key).inserted else { continue }

@@ -18,6 +18,14 @@ enum AppTheme {
         return Color.accentColor
         #endif
     }
+
+    static var onBrandAccent: Color {
+        #if os(iOS)
+        return Color(uiColor: .init { $0.userInterfaceStyle == .dark ? .black : .white })
+        #else
+        return .white
+        #endif
+    }
     
     static let action = Color(red: 0.35, green: 0.4, blue: 0.5) // Slate/Cool Gray for actions
     static let success = Color(red: 0.4, green: 0.55, blue: 0.45) // Sage

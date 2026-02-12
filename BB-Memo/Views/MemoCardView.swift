@@ -31,7 +31,7 @@ struct MemoCardView: View {
         .confirmationDialog("确定删除这条思考？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("删除", role: .destructive) {
                 withAnimation {
-                    TagUsageCounter.decrement(memo.tags)
+                    TagUsageCounter.decrement(memo.tagsList)
                     NotificationManager.cancelReminder(
                         memoID: memo.reminderIdentifier
                     )
@@ -130,9 +130,9 @@ struct MemoCardView: View {
 
     @ViewBuilder
     private var tagsRow: some View {
-        if !memo.tags.isEmpty {
+        if !memo.tagsList.isEmpty {
             FlowLayout(spacing: 6) {
-                ForEach(memo.tags) { tag in
+                ForEach(memo.tagsList) { tag in
                     let color = AppTheme.tagColor(for: tag.name)
                     Button {
                         onTagTap?(tag)
