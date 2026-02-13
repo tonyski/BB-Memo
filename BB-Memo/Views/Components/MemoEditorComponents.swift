@@ -14,6 +14,15 @@ struct AISuggestionBar: View {
     var onAction: (TagSuggestion) -> Void
     var onAddCustom: () -> Void
 
+    private var selectedTagKeys: Set<String> {
+        Set(
+            selectedTagNames.compactMap { name in
+                let normalized = Tag.normalize(name)
+                return normalized.isEmpty ? nil : normalized.lowercased()
+            }
+        )
+    }
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -32,7 +41,8 @@ struct AISuggestionBar: View {
                 .buttonStyle(.plain)
 
                 ForEach(suggestions) { suggestion in
-                    let isSelected = selectedTagNames.contains(suggestion.name)
+                    let suggestionKey = Tag.normalize(suggestion.name).lowercased()
+                    let isSelected = selectedTagKeys.contains(suggestionKey)
                     Button { onAction(suggestion) } label: {
                         Text("#\(suggestion.name)")
                         .font(.system(size: 13, weight: .semibold, design: AppTheme.Layout.fontDesign))
@@ -59,7 +69,7 @@ struct AISuggestionBar: View {
 }
 
 struct TagPickerSheet: View {
-    let selectedTagNames: Set<String>
+    @Binding var selectedTagNames: Set<String>
     var onToggle: (String) -> Void
     var onCreate: (String) -> Void
     private let frequentTags: [Tag]
@@ -69,11 +79,11 @@ struct TagPickerSheet: View {
 
     init(
         allTags: [Tag],
-        selectedTagNames: Set<String>,
+        selectedTagNames: Binding<Set<String>>,
         onToggle: @escaping (String) -> Void,
         onCreate: @escaping (String) -> Void
     ) {
-        self.selectedTagNames = selectedTagNames
+        self._selectedTagNames = selectedTagNames
         self.onToggle = onToggle
         self.onCreate = onCreate
         self.frequentTags = TagPickerSheet.makeFrequentTags(from: allTags)
@@ -96,8 +106,27 @@ struct TagPickerSheet: View {
             .map { $0 }
     }
 
+    private var selectedTagKeys: Set<String> {
+        Set(
+            selectedTagNames.compactMap { name in
+                let normalized = Tag.normalize(name)
+                return normalized.isEmpty ? nil : normalized.lowercased()
+            }
+        )
+    }
+
     private var selectedNamesSorted: [String] {
-        selectedTagNames.sorted()
+        selectedTagNames
+            .map { Tag.normalize($0) }
+            .filter { !$0.isEmpty }
+            .reduce(into: [String: String]()) { map, name in
+                let key = name.lowercased()
+                if map[key] == nil {
+                    map[key] = name
+                }
+            }
+            .values
+            .sorted { $0.localizedCompare($1) == .orderedAscending }
     }
 
     private var inputFieldBackgroundColor: Color {
@@ -185,7 +214,8 @@ struct TagPickerSheet: View {
                                 spacing: 8
                             ) {
                                 ForEach(frequentTags) { tag in
-                                    let isSelected = selectedTagNames.contains(tag.name)
+                                    let key = Tag.normalize(tag.name).lowercased()
+                                    let isSelected = selectedTagKeys.contains(key)
                                     Button {
                                         onToggle(tag.name)
                                     } label: {
@@ -277,10 +307,20 @@ enum MemoTagResolver {
 
 enum EditorHelper {
     static func toggleTag(_ name: String, selectedTagNames: inout Set<String>) {
-        if selectedTagNames.contains(name) {
-            selectedTagNames.remove(name)
+        let normalized = Tag.normalize(name)
+        guard !normalized.isEmpty else { return }
+        let key = normalized.lowercased()
+
+        let matchedNames = selectedTagNames.filter {
+            Tag.normalize($0).lowercased() == key
+        }
+
+        if matchedNames.isEmpty {
+            selectedTagNames.insert(normalized)
         } else {
-            selectedTagNames.insert(name)
+            for matched in matchedNames {
+                selectedTagNames.remove(matched)
+            }
         }
     }
 

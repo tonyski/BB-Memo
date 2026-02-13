@@ -12,8 +12,8 @@ import SwiftData
 enum MemoTagRelationshipSync {
     static func synchronizeTagBackReferences(for memo: Memo, oldTags: [Tag], newTags: [Tag]) {
         let memoKey = memoModelKey(memo)
-        let oldByKey = Dictionary(uniqueKeysWithValues: oldTags.map { (tagModelKey($0), $0) })
-        let newByKey = Dictionary(uniqueKeysWithValues: newTags.map { (tagModelKey($0), $0) })
+        let oldByKey = uniqueTagsByModelKey(oldTags)
+        let newByKey = uniqueTagsByModelKey(newTags)
         let oldKeys = Set(oldByKey.keys)
         let newKeys = Set(newByKey.keys)
 
@@ -60,5 +60,18 @@ enum MemoTagRelationshipSync {
 
     private static func memoModelKey(_ memo: Memo) -> String {
         String(describing: memo.persistentModelID)
+    }
+
+    private static func uniqueTagsByModelKey(_ tags: [Tag]) -> [String: Tag] {
+        var result: [String: Tag] = [:]
+        result.reserveCapacity(tags.count)
+        for tag in tags {
+            let key = tagModelKey(tag)
+            // 历史数据可能出现重复关系，这里取首个并跳过重复，避免 uniqueKeysWithValues 触发 trap。
+            if result[key] == nil {
+                result[key] = tag
+            }
+        }
+        return result
     }
 }

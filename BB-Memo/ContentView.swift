@@ -38,6 +38,7 @@ struct ContentView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .animation(.default, value: showSidebar)
             .sheet(isPresented: $showComposer) {
                 MemoEditorSheetView(memo: nil)
@@ -230,13 +231,14 @@ struct MacContentView: View {
     }
 
     private func deleteTag(_ tag: Tag) {
-        if selectedTag?.persistentModelID == tag.persistentModelID {
-            selectedTag = nil
-        }
+        let wasSelected = selectedTag?.persistentModelID == tag.persistentModelID
         MemoTagRelationshipSync.detachTagFromMemos(tag)
         modelContext.delete(tag)
         do {
             try modelContext.save()
+            if wasSelected {
+                selectedTag = nil
+            }
             AppNotifications.postMemoDataChanged()
         } catch {
             print("MacContentView deleteTag save failed: \(error)")

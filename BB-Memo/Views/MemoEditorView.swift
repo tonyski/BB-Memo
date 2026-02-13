@@ -123,7 +123,7 @@ struct MemoEditorView: View {
                 case .tagPicker:
                     TagPickerSheet(
                         allTags: allTags,
-                        selectedTagNames: selectedTagNames,
+                        selectedTagNames: $selectedTagNames,
                         onToggle: { name in
                             toggleTagByName(name)
                         },
@@ -166,7 +166,7 @@ struct MemoEditorView: View {
                     suggestions: mergedTagSuggestions,
                     selectedTagNames: selectedTagNames
                 ) { tag in
-                    EditorHelper.toggleTag(tag.name, selectedTagNames: &selectedTagNames)
+                    toggleTagByName(tag.name)
                     HapticFeedback.light.play()
                 } onAddCustom: {
                     activeSheet = .tagPicker

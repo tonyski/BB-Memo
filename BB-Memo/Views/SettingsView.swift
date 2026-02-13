@@ -110,12 +110,14 @@ struct SettingsView: View {
                         if syncDiagnostics.isManualSyncInProgress {
                             ProgressView().controlSize(.small)
                         } else {
-                            Image(systemName: "arrow.triangle.2.circlepath.icloud")
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 13, weight: .semibold))
                         }
                     }
-                    .buttonStyle(.bordered)
-                    .tint(.white)
-                    .foregroundStyle(.black)
+                    .buttonStyle(.plain)
+                    .padding(6)
+                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .foregroundStyle(syncDiagnostics.isManualSyncInProgress ? .secondary : AppTheme.brandAccent)
                     .disabled(syncDiagnostics.isManualSyncInProgress)
                 }
 
