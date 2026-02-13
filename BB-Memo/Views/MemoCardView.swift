@@ -17,6 +17,14 @@ struct MemoCardView: View {
 
     @State private var isExpanded = false
     @State private var showDeleteConfirm = false
+    
+    private static let dateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppTheme.Layout.cardSpacing) {
@@ -46,7 +54,7 @@ struct MemoCardView: View {
 
     private var headerRow: some View {
         HStack(spacing: 6) {
-            Text(memo.createdAt, style: .relative)
+            Text(Self.dateTimeFormatter.string(from: memo.createdAt))
                 .font(.system(size: 11, design: AppTheme.Layout.fontDesign))
                 .foregroundStyle(.secondary)
 

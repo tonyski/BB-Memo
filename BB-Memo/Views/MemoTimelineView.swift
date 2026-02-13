@@ -7,10 +7,12 @@
 
 import SwiftUI
 import SwiftData
+import CoreData
 
 /// BB 主页 — 时间线 + 标签侧栏
 struct MemoTimelineView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
 
     private struct PagingState {
         var tagLoadedCount = 0
@@ -71,6 +73,14 @@ struct MemoTimelineView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .memoDataChanged)) { _ in
             resetAndReload()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange)) { _ in
+            resetAndReload()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                resetAndReload()
+            }
         }
     }
 
