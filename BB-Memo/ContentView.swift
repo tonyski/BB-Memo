@@ -233,8 +233,14 @@ struct MacContentView: View {
         if selectedTag?.persistentModelID == tag.persistentModelID {
             selectedTag = nil
         }
+        MemoTagRelationshipSync.detachTagFromMemos(tag)
         modelContext.delete(tag)
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+            AppNotifications.postMemoDataChanged()
+        } catch {
+            print("MacContentView deleteTag save failed: \(error)")
+        }
         tagPendingDeletion = nil
     }
 }

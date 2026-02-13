@@ -205,12 +205,14 @@ struct MemoEditorView: View {
             memo.updatedAt = .now
             memo.reminderDate = reminderDate
             memo.tags = tags
+            MemoTagRelationshipSync.synchronizeTagBackReferences(for: memo, oldTags: oldTags, newTags: tags)
             TagUsageCounter.applyDelta(oldTags: oldTags, newTags: tags)
             targetMemo = memo
         } else {
             // 新建
             let newMemo = Memo(content: trimmedContent, reminderDate: reminderDate, tags: tags)
             modelContext.insert(newMemo)
+            MemoTagRelationshipSync.synchronizeTagBackReferences(for: newMemo, oldTags: [], newTags: tags)
             TagUsageCounter.increment(tags)
             targetMemo = newMemo
         }

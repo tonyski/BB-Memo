@@ -34,7 +34,8 @@ enum TagDeduplicator {
 
             for duplicate in sorted.dropFirst() {
                 for memo in duplicate.memosList {
-                    var currentTags = memo.tagsList.filter {
+                    let oldTags = memo.tagsList
+                    var currentTags = oldTags.filter {
                         $0.persistentModelID != duplicate.persistentModelID
                     }
                     let containsCanonical = currentTags.contains {
@@ -44,6 +45,11 @@ enum TagDeduplicator {
                         currentTags.append(canonical)
                     }
                     memo.tags = currentTags
+                    MemoTagRelationshipSync.synchronizeTagBackReferences(
+                        for: memo,
+                        oldTags: oldTags,
+                        newTags: currentTags
+                    )
                 }
                 context.delete(duplicate)
                 mergedCount += 1

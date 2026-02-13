@@ -139,8 +139,14 @@ struct TagSidebarView: View {
         if selectedTag?.persistentModelID == tag.persistentModelID {
             selectedTag = nil
         }
+        MemoTagRelationshipSync.detachTagFromMemos(tag)
         modelContext.delete(tag)
-        try? modelContext.save()
+        do {
+            try modelContext.save()
+            AppNotifications.postMemoDataChanged()
+        } catch {
+            print("TagSidebarView deleteTag save failed: \(error)")
+        }
         HapticFeedback.medium.play()
         tagPendingDeletion = nil
     }

@@ -24,6 +24,7 @@ struct SettingsView: View {
     @State private var tagCount = 0
     @State private var remindersCount = 0
     @State private var lastLocalUpdateDate: Date?
+    @State private var isSyncLogExpanded = false
 
     private let syncInsightColumns = [
         GridItem(.flexible(), spacing: 8),
@@ -46,8 +47,7 @@ struct SettingsView: View {
     private var settingsContent: some View {
         ScrollView {
             VStack(spacing: 10) {
-                syncOverviewPanel
-                syncInsightPanel
+                syncPanel
                 dataOverviewPanel
                 dataManagementPanel
                 appInfoPanel
@@ -98,52 +98,26 @@ struct SettingsView: View {
 
     // MARK: - 新布局
 
-    private var syncOverviewPanel: some View {
+    private var syncPanel: some View {
         panelContainer(borderColor: syncIndicatorColor.opacity(0.28)) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
-                    panelTitle("同步状态", icon: "icloud")
+                    panelTitle("同步中心", icon: "icloud")
                     Spacer()
-                    statusBadge(text: isSyncHealthy ? "正常" : "需处理", color: syncIndicatorColor)
                     Button {
-                        Task { await syncDiagnostics.refreshAccountStatus() }
+                        Task { await syncDiagnostics.triggerManualSync(using: modelContext) }
                     } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.caption)
-                            .foregroundStyle(AppTheme.brandAccent)
-                            .frame(width: 24, height: 24)
+                        if syncDiagnostics.isManualSyncInProgress {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath.icloud")
+                        }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.bordered)
+                    .tint(.white)
+                    .foregroundStyle(.black)
+                    .disabled(syncDiagnostics.isManualSyncInProgress)
                 }
-
-                HStack(spacing: 8) {
-                    ZStack {
-                        Circle()
-                            .fill(syncIndicatorColor.opacity(0.18))
-                            .frame(width: 28, height: 28)
-                        Image(systemName: syncIndicatorIcon)
-                            .font(.caption2)
-                            .foregroundStyle(syncIndicatorColor)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(syncPrimaryLabel)
-                            .font(.footnote)
-                            .fontWeight(.semibold)
-                        Text(syncSecondaryLabel)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-            }
-        }
-    }
-
-    private var syncInsightPanel: some View {
-        panelContainer {
-            VStack(alignment: .leading, spacing: 10) {
-                panelTitle("同步透视", icon: "waveform.path.ecg")
 
                 LazyVGrid(columns: syncInsightColumns, spacing: 8) {
                     insightTile(title: "存储模式", value: syncDiagnostics.storageMode.label)
@@ -152,7 +126,7 @@ struct SettingsView: View {
                         title: "最近检查",
                         value: syncDiagnostics.lastStatusCheckDate?.formatted(.relative(presentation: .named)) ?? "未检查"
                     )
-                    insightTile(title: "诊断条目", value: "\(diagnosticMessages.count)")
+                    insightTile(title: "最近手动同步", value: syncDiagnostics.lastManualSyncDate?.formatted(.relative(presentation: .named)) ?? "未执行")
                 }
 
                 if !diagnosticMessages.isEmpty {
@@ -168,6 +142,33 @@ struct SettingsView: View {
                         .padding(.top, 4)
                     }
                     .font(.caption2)
+                    .tint(.secondary)
+                }
+
+                if !syncDiagnostics.syncLogs.isEmpty {
+                    DisclosureGroup(
+                        isExpanded: $isSyncLogExpanded,
+                        content: {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(syncDiagnostics.syncLogs.reversed()) { entry in
+                                        Text("\(entry.date.formatted(.dateTime.hour().minute().second())) [\(syncLogLevelLabel(entry.level))] \(entry.message)")
+                                            .font(.caption2.monospaced())
+                                            .foregroundStyle(.secondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: 180)
+                            .padding(.top, 4)
+                        },
+                        label: {
+                            Text("同步日志")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                        }
+                    )
                     .tint(.secondary)
                 }
             }
@@ -272,16 +273,6 @@ struct SettingsView: View {
         }
     }
 
-    private func statusBadge(text: String, color: Color) -> some View {
-        Text(text)
-            .font(.caption2)
-            .fontWeight(.semibold)
-            .foregroundStyle(color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(color.opacity(0.12), in: Capsule())
-    }
-
     private func insightTile(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
@@ -381,31 +372,6 @@ struct SettingsView: View {
 
     // MARK: - 同步状态映射
 
-    private var syncPrimaryLabel: String {
-        switch syncDiagnostics.storageMode {
-        case .cloudKit:
-            if syncDiagnostics.accountStatus == .available {
-                return "同步中"
-            }
-            return "账号异常（同步受限）"
-        case .localFallback:
-            return "本地模式（未同步）"
-        case .inMemoryFallback:
-            return "临时模式（不持久化）"
-        }
-    }
-
-    private var syncIndicatorIcon: String {
-        switch syncDiagnostics.storageMode {
-        case .cloudKit:
-            return syncDiagnostics.accountStatus == .available ? "checkmark.icloud" : "exclamationmark.icloud"
-        case .localFallback:
-            return "icloud.slash"
-        case .inMemoryFallback:
-            return "exclamationmark.triangle"
-        }
-    }
-
     private var syncIndicatorColor: Color {
         switch syncDiagnostics.storageMode {
         case .cloudKit:
@@ -432,10 +398,6 @@ struct SettingsView: View {
         }
     }
 
-    private var syncSecondaryLabel: String {
-        isSyncHealthy ? "后台自动同步" : "当前未处于可同步状态"
-    }
-
     private var isSyncHealthy: Bool {
         syncDiagnostics.storageMode == .cloudKit && syncDiagnostics.accountStatus == .available
     }
@@ -452,5 +414,14 @@ struct SettingsView: View {
             messages.append("账号检查失败：\(accountStatusMessage)")
         }
         return messages
+    }
+
+    private func syncLogLevelLabel(_ level: SyncLogLevel) -> String {
+        switch level {
+        case .info: return "INFO"
+        case .success: return "OK"
+        case .warning: return "WARN"
+        case .error: return "ERROR"
+        }
     }
 }

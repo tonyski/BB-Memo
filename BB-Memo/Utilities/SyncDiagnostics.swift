@@ -7,6 +7,21 @@ import Foundation
 import CloudKit
 import SwiftData
 import Combine
+import CoreData
+
+enum SyncLogLevel: String {
+    case info
+    case success
+    case warning
+    case error
+}
+
+struct SyncLogEntry: Identifiable {
+    let id = UUID()
+    let date: Date
+    let level: SyncLogLevel
+    let message: String
+}
 
 enum AppStorageMode: Equatable {
     case cloudKit
@@ -110,11 +125,22 @@ final class SyncDiagnostics: ObservableObject {
     @Published private(set) var accountStatus: CKAccountStatus = .couldNotDetermine
     @Published private(set) var lastStatusCheckDate: Date?
     @Published private(set) var accountStatusMessage: String?
+    @Published private(set) var isManualSyncInProgress = false
+    @Published private(set) var lastManualSyncDate: Date?
+    @Published private(set) var syncLogs: [SyncLogEntry] = []
+
+    private var cancellables = Set<AnyCancellable>()
+    private let maxLogCount = 120
 
     init(iCloudContainerIdentifier: String, storageMode: AppStorageMode, startupMessage: String?) {
         self.iCloudContainerIdentifier = iCloudContainerIdentifier
         self.storageMode = storageMode
         self.startupMessage = startupMessage
+        appendLog(level: .info, "同步诊断已启动，当前模式：\(storageMode.label)")
+        if let startupMessage, !startupMessage.isEmpty {
+            appendLog(level: .warning, startupMessage)
+        }
+        observeSyncSignals()
     }
 
     var syncSummary: String {
@@ -133,14 +159,84 @@ final class SyncDiagnostics: ObservableObject {
 
     func refreshAccountStatus() async {
         lastStatusCheckDate = .now
+        appendLog(level: .info, "开始检查 iCloud 账号状态")
         do {
             let container = CKContainer(identifier: iCloudContainerIdentifier)
             let status = try await container.accountStatus()
             accountStatus = status
             accountStatusMessage = nil
+            appendLog(level: status == .available ? .success : .warning, "账号状态：\(accountStatusLabel(status))")
         } catch {
             accountStatus = .couldNotDetermine
             accountStatusMessage = error.localizedDescription
+            appendLog(level: .error, "账号状态检查失败：\(error.localizedDescription)")
+        }
+    }
+
+    func triggerManualSync(using context: ModelContext) async {
+        guard !isManualSyncInProgress else {
+            appendLog(level: .warning, "已有手动同步任务正在进行")
+            return
+        }
+
+        syncLogs.removeAll()
+        isManualSyncInProgress = true
+        appendLog(level: .info, "开始手动同步：检查账号并提交本地事务")
+        defer {
+            isManualSyncInProgress = false
+            lastManualSyncDate = .now
+        }
+
+        await refreshAccountStatus()
+
+        guard storageMode == .cloudKit else {
+            appendLog(level: .warning, "当前不是 CloudKit 模式，无法执行跨设备同步")
+            return
+        }
+        guard accountStatus == .available else {
+            appendLog(level: .warning, "iCloud 账号不可用，已跳过手动同步")
+            return
+        }
+
+        do {
+            try context.save()
+            appendLog(level: .success, "本地事务提交成功，CloudKit 将在后台同步")
+        } catch {
+            appendLog(level: .error, "本地事务提交失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func observeSyncSignals() {
+        NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.appendLog(level: .info, "检测到远端数据变更通知")
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .memoDataChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.appendLog(level: .info, "检测到本地数据变更")
+            }
+            .store(in: &cancellables)
+    }
+
+    private func appendLog(level: SyncLogLevel, _ message: String) {
+        syncLogs.append(SyncLogEntry(date: .now, level: level, message: message))
+        if syncLogs.count > maxLogCount {
+            syncLogs.removeFirst(syncLogs.count - maxLogCount)
+        }
+    }
+
+    private func accountStatusLabel(_ status: CKAccountStatus) -> String {
+        switch status {
+        case .available: return "可用"
+        case .noAccount: return "未登录 iCloud"
+        case .restricted: return "受限制"
+        case .temporarilyUnavailable: return "暂时不可用"
+        case .couldNotDetermine: return "无法判断"
+        @unknown default: return "未知状态"
         }
     }
 }

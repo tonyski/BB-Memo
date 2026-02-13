@@ -39,13 +39,14 @@ struct MemoCardView: View {
         .sensoryFeedback(.impact, trigger: isExpanded)
         .confirmationDialog("确定删除这条思考？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("删除", role: .destructive) {
+                let reminderID = memo.reminderIdentifier
                 withAnimation {
                     TagUsageCounter.decrement(memo.tagsList)
-                    NotificationManager.cancelReminder(
-                        memoID: memo.reminderIdentifier
-                    )
+                    MemoTagRelationshipSync.detachMemoFromTags(memo)
                     modelContext.delete(memo)
-                    persistAndNotify()
+                    persistAndNotify {
+                        NotificationManager.cancelReminder(memoID: reminderID)
+                    }
                 }
             }
         }
@@ -161,9 +162,10 @@ struct MemoCardView: View {
         }
     }
 
-    private func persistAndNotify() {
+    private func persistAndNotify(onSuccess: (() -> Void)? = nil) {
         do {
             try modelContext.save()
+            onSuccess?()
             AppNotifications.postMemoDataChanged()
         } catch {
             print("MemoCardView save failed: \(error)")

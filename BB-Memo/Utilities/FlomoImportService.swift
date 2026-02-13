@@ -66,17 +66,17 @@ enum FlomoImportService {
             let tagNames = TagExtractor.extractHashtags(from: flomoMemo.content)
             let tags = resolveTags(tagNames, tagLookup: &tagLookup, context: context)
 
-            context.insert(
-                Memo(
-                    content: flomoMemo.content,
-                    createdAt: flomoMemo.createdAt,
-                    updatedAt: flomoMemo.createdAt,
-                    sourceType: "flomo_html",
-                    sourceIdentifier: sourceIdentifier,
-                    importedAt: importedAt,
-                    tags: tags
-                )
+            let newMemo = Memo(
+                content: flomoMemo.content,
+                createdAt: flomoMemo.createdAt,
+                updatedAt: flomoMemo.createdAt,
+                sourceType: "flomo_html",
+                sourceIdentifier: sourceIdentifier,
+                importedAt: importedAt,
+                tags: tags
             )
+            context.insert(newMemo)
+            MemoTagRelationshipSync.synchronizeTagBackReferences(for: newMemo, oldTags: [], newTags: tags)
             TagUsageCounter.increment(tags)
             importedCount += 1
         }
