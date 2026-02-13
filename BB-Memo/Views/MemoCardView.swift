@@ -31,6 +31,7 @@ struct MemoCardView: View {
             headerRow
             contentSection
             tagsRow
+                .padding(.top, 6)
         }
         .padding(.top, 4)
         .padding(.bottom, 6)
