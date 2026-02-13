@@ -72,7 +72,7 @@ struct TagSidebarView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("仅删除标签，不删除 Memo。")
+            Text("仅移除该标签，不会删除已关联的 Memo。")
         }
     }
 

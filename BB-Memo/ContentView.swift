@@ -104,7 +104,7 @@ struct MacContentView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("仅删除标签，不删除 Memo。")
+            Text("仅移除该标签，不会删除已关联的 Memo。")
         }
     }
 
@@ -214,21 +214,16 @@ struct MacContentView: View {
                 .background(AppTheme.background)
             }
         }
-        .navigationTitle(selectedTag.map { "#\($0.name)" } ?? "全部思考")
+        .navigationTitle(selectedTag.map { "# \($0.name)" } ?? "全部思考")
         .toolbar {
             if selectedTag != nil {
-                ToolbarItem(placement: .navigation) {
+                ToolbarItem {
                     Button {
                         selectedTag = nil
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "xmark.circle.fill")
-                            Text("清除筛选")
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(AppTheme.brandAccent)
+                        Label("清除筛选", systemImage: "xmark.circle")
                     }
-                    .buttonStyle(.plain)
+                    .help("清除标签筛选")
                 }
             }
         }

@@ -25,6 +25,7 @@ struct MemoEditorView: View {
     @State private var activeSheet: ActiveSheet?
     @State private var showSaveErrorAlert = false
     @State private var saveErrorMessage = ""
+    @State private var allTagNamesSnapshot: [String] = []
 
     @FocusState private var isFocused: Bool
 
@@ -76,7 +77,7 @@ struct MemoEditorView: View {
                         .onChange(of: content) { _, newValue in
                             EditorHelper.triggerAIAnalysis(
                                 newValue,
-                                allTags: allTags,
+                                existingTagNames: allTagNamesSnapshot,
                                 debounceTask: &debounceTask,
                                 suggestions: $aiSuggestions
                             )
@@ -141,6 +142,7 @@ struct MemoEditorView: View {
                 Text(saveErrorMessage)
             }
             .onAppear {
+                allTagNamesSnapshot = allTags.map(\.name)
                 if let memo = memo {
                     content = memo.content
                     reminderDate = memo.reminderDate
@@ -150,6 +152,9 @@ struct MemoEditorView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     isFocused = true
                 }
+            }
+            .onChange(of: allTags.map(\.name)) { _, newValue in
+                allTagNamesSnapshot = newValue
             }
         }
     }
@@ -196,6 +201,7 @@ struct MemoEditorView: View {
             // 更新已有
             let oldTags = memo.tagsList
             memo.content = trimmedContent
+            memo.refreshContentHash()
             memo.updatedAt = .now
             memo.reminderDate = reminderDate
             memo.tags = tags

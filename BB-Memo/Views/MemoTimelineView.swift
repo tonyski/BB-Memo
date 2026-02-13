@@ -36,8 +36,10 @@ struct MemoTimelineView: View {
     @Binding var showSidebar: Bool
     @State private var selectedTag: Tag?
     @State private var displayedMemos: [Memo] = []
+    @State private var selectedTagSortedMemos: [Memo] = []
     @State private var paging = PagingState()
     @State private var totalMemoCount = 0
+    @State private var reloadTask: Task<Void, Never>?
 
     private let pageSize = 40
     private let topBarFadeAnimation = Animation.easeOut(duration: 0.12)
@@ -72,15 +74,18 @@ struct MemoTimelineView: View {
             resetAndReload()
         }
         .onReceive(NotificationCenter.default.publisher(for: .memoDataChanged)) { _ in
-            resetAndReload()
+            scheduleReload()
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange)) { _ in
-            resetAndReload()
+            scheduleReload()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
-                resetAndReload()
+                scheduleReload()
             }
+        }
+        .onDisappear {
+            reloadTask?.cancel()
         }
     }
 
@@ -230,7 +235,9 @@ struct MemoTimelineView: View {
     // MARK: - Paging
 
     private func resetAndReload() {
+        reloadTask?.cancel()
         displayedMemos = []
+        selectedTagSortedMemos = selectedTag.map { MemoFilter.sort($0.memosList) } ?? []
         paging.reset()
         refreshTotalCount()
         loadNextPage()
@@ -251,12 +258,11 @@ struct MemoTimelineView: View {
         paging.isLoadingPage = true
         defer { paging.isLoadingPage = false }
 
-        if let tag = selectedTag {
-            let sorted = MemoFilter.sort(tag.memosList)
-            let page = Array(sorted.dropFirst(paging.tagLoadedCount).prefix(pageSize))
+        if selectedTag != nil {
+            let page = Array(selectedTagSortedMemos.dropFirst(paging.tagLoadedCount).prefix(pageSize))
             displayedMemos.append(contentsOf: page)
             paging.tagLoadedCount += page.count
-            paging.canLoadMore = page.count == pageSize && paging.tagLoadedCount < sorted.count
+            paging.canLoadMore = page.count == pageSize && paging.tagLoadedCount < selectedTagSortedMemos.count
             return
         }
 
@@ -311,6 +317,17 @@ struct MemoTimelineView: View {
             totalMemoCount = try modelContext.fetchCount(descriptor)
         } catch {
             totalMemoCount = displayedMemos.count
+        }
+    }
+
+    private func scheduleReload(delay: Duration = .milliseconds(280)) {
+        reloadTask?.cancel()
+        reloadTask = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                resetAndReload()
+            }
         }
     }
 }

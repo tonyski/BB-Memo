@@ -59,20 +59,32 @@ struct AISuggestionBar: View {
 }
 
 struct TagPickerSheet: View {
-    let allTags: [Tag]
     let selectedTagNames: Set<String>
     var onToggle: (String) -> Void
     var onCreate: (String) -> Void
+    private let frequentTags: [Tag]
 
     @Environment(\.dismiss) private var dismiss
     @State private var input = ""
+
+    init(
+        allTags: [Tag],
+        selectedTagNames: Set<String>,
+        onToggle: @escaping (String) -> Void,
+        onCreate: @escaping (String) -> Void
+    ) {
+        self.selectedTagNames = selectedTagNames
+        self.onToggle = onToggle
+        self.onCreate = onCreate
+        self.frequentTags = TagPickerSheet.makeFrequentTags(from: allTags)
+    }
 
     private var normalizedInput: String {
         input.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
     }
 
-    private var frequentTags: [Tag] {
+    private static func makeFrequentTags(from allTags: [Tag]) -> [Tag] {
         allTags
             .sorted { lhs, rhs in
                 let lCount = lhs.usageCount
@@ -274,7 +286,7 @@ enum EditorHelper {
 
     static func triggerAIAnalysis(
         _ text: String,
-        allTags: [Tag],
+        existingTagNames: [String],
         debounceTask: inout Task<Void, Never>?,
         suggestions: Binding<[TagSuggestion]>
     ) {
@@ -282,8 +294,7 @@ enum EditorHelper {
         debounceTask = Task {
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled else { return }
-            let names = allTags.map(\.name)
-            let result = TagExtractor.suggestTags(from: text, existingTagNames: names)
+            let result = TagExtractor.suggestTags(from: text, existingTagNames: existingTagNames)
             await MainActor.run {
                 suggestions.wrappedValue = result
             }

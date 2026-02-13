@@ -10,29 +10,19 @@ import SwiftData
 
 /// 搜索页面 — 支持关键词搜索 + 时间筛选
 struct MemoSearchView: View {
-    @Query(sort: \Memo.createdAt, order: .reverse) private var memos: [Memo]
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
     @Binding var selectedTag: Tag?
     @State private var searchText = ""
     @State private var debouncedSearchText = ""
     @State private var debounceTask: Task<Void, Never>?
+    @State private var searchResults: [Memo] = []
     @State private var memoToEdit: Memo?
     @State private var selectedTimeFilter: MemoTimeFilter = .all
     @FocusState private var isFocused: Bool
-
-    private var filteredMemos: [Memo] {
-        // 未输入关键词时不展示内容
-        guard !debouncedSearchText.isEmpty else { return [] }
-
-        var result = MemoFilter.apply(memos, searchText: debouncedSearchText)
-
-        // 时间筛选
-        if let start = selectedTimeFilter.startDate {
-            result = result.filter { $0.createdAt >= start }
-        }
-
-        return result
+    private var trimmedKeyword: String {
+        debouncedSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var body: some View {
@@ -92,7 +82,7 @@ struct MemoSearchView: View {
             }
 
             // 结果
-            if filteredMemos.isEmpty {
+            if searchResults.isEmpty {
                 Spacer()
                 VStack(spacing: 12) {
                     Image(systemName: searchText.isEmpty ? "magnifyingglass" : "doc.text.magnifyingglass")
@@ -106,7 +96,7 @@ struct MemoSearchView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        ForEach(filteredMemos) { memo in
+                        ForEach(searchResults) { memo in
                             MemoCardView(memo: memo, onEdit: {
                                 memoToEdit = memo
                             }, onTagTap: { tag in
@@ -135,6 +125,13 @@ struct MemoSearchView: View {
         .onAppear {
             isFocused = true
             debouncedSearchText = searchText
+            performSearch()
+        }
+        .onChange(of: debouncedSearchText) { _, _ in
+            performSearch()
+        }
+        .onChange(of: selectedTimeFilter) { _, _ in
+            performSearch()
         }
         .onChange(of: searchText) { _, newValue in
             debounceTask?.cancel()
@@ -153,5 +150,64 @@ struct MemoSearchView: View {
         .onDisappear {
             debounceTask?.cancel()
         }
+    }
+
+    private func performSearch() {
+        guard !trimmedKeyword.isEmpty else {
+            searchResults = []
+            return
+        }
+
+        let startDate = selectedTimeFilter.startDate
+        let contentMatches = fetchContentMatches(keyword: trimmedKeyword, startDate: startDate)
+        let tagMatches = fetchTagMatches(keyword: trimmedKeyword, startDate: startDate)
+        searchResults = MemoFilter.sort(merge(contentMatches, with: tagMatches))
+    }
+
+    private func fetchContentMatches(keyword: String, startDate: Date?) -> [Memo] {
+        let descriptor = makeContentDescriptor(keyword: keyword, startDate: startDate)
+        return (try? modelContext.fetch(descriptor)) ?? []
+    }
+
+    private func fetchTagMatches(keyword: String, startDate: Date?) -> [Memo] {
+        let tagDescriptor = FetchDescriptor<Tag>(
+            predicate: #Predicate<Tag> { tag in
+                tag.name.localizedStandardContains(keyword)
+            }
+        )
+        let tags = (try? modelContext.fetch(tagDescriptor)) ?? []
+        return tags.flatMap(\.memosList).filter { memo in
+            guard let startDate else { return true }
+            return memo.createdAt >= startDate
+        }
+    }
+
+    private func makeContentDescriptor(keyword: String, startDate: Date?) -> FetchDescriptor<Memo> {
+        if let startDate {
+            return FetchDescriptor<Memo>(
+                predicate: #Predicate<Memo> { memo in
+                    memo.createdAt >= startDate
+                    && memo.content.localizedStandardContains(keyword)
+                },
+                sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
+            )
+        }
+        return FetchDescriptor<Memo>(
+            predicate: #Predicate<Memo> { memo in
+                memo.content.localizedStandardContains(keyword)
+            },
+            sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
+        )
+    }
+
+    private func merge(_ lhs: [Memo], with rhs: [Memo]) -> [Memo] {
+        var merged: [PersistentIdentifier: Memo] = [:]
+        for memo in lhs {
+            merged[memo.persistentModelID] = memo
+        }
+        for memo in rhs {
+            merged[memo.persistentModelID] = memo
+        }
+        return Array(merged.values)
     }
 }

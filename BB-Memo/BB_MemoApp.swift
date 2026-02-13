@@ -31,8 +31,7 @@ struct BB_MemoApp: App {
             ContentView()
                 .task {
                     DispatchQueue.global(qos: .utility).async {
-                        TagDeduplicator.mergeDuplicatesIfNeeded(container: sharedModelContainer)
-                        TagUsageCounter.backfillIfNeeded(container: sharedModelContainer)
+                        AppDataMaintenance.runOnLaunch(container: sharedModelContainer)
                     }
                 }
                 .task {
@@ -47,5 +46,22 @@ struct BB_MemoApp: App {
         #if os(macOS)
         .defaultSize(width: 960, height: 680)
         #endif
+    }
+}
+
+/// 启动维护任务：修复派生字段、标签去重、计数校准
+private enum AppDataMaintenance {
+    static func runOnLaunch(container: ModelContainer) {
+        let context = ModelContext(container)
+        do {
+            try MemoMaintenance.backfillDerivedFields(in: context)
+            let mergedCount = try TagDeduplicator.mergeDuplicates(in: context)
+            try TagUsageCounter.resyncAll(in: context)
+            if mergedCount > 0 {
+                print("AppDataMaintenance: merged \(mergedCount) duplicate tags.")
+            }
+        } catch {
+            print("AppDataMaintenance failed: \(error)")
+        }
     }
 }

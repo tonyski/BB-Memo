@@ -6,28 +6,8 @@
 import Foundation
 import SwiftData
 
-/// 一次性修复历史重复标签：按 normalizedName 合并到同一 Tag
+/// 合并重复标签：按 normalizedName 归并到同一 Tag
 enum TagDeduplicator {
-    private static let dedupeKey = "tag_dedup_v1"
-
-    static func mergeDuplicatesIfNeeded(container: ModelContainer) {
-        let defaults = UserDefaults.standard
-        guard defaults.bool(forKey: dedupeKey) == false else { return }
-
-        let context = ModelContext(container)
-        do {
-            let mergedCount = try mergeDuplicates(in: context)
-            try TagUsageCounter.resyncAll(in: context)
-            defaults.set(true, forKey: dedupeKey)
-            if mergedCount > 0 {
-                print("TagDeduplicator: merged \(mergedCount) duplicate tags.")
-            }
-        } catch {
-            defaults.removeObject(forKey: dedupeKey)
-            print("TagDeduplicator failed: \(error)")
-        }
-    }
-
     @discardableResult
     static func mergeDuplicates(in context: ModelContext) throws -> Int {
         let allTags = try context.fetch(FetchDescriptor<Tag>())

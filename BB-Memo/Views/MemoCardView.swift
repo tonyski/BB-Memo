@@ -45,7 +45,7 @@ struct MemoCardView: View {
                         memoID: memo.reminderIdentifier
                     )
                     modelContext.delete(memo)
-                    AppNotifications.postMemoDataChanged()
+                    persistAndNotify()
                 }
             }
         }
@@ -86,7 +86,7 @@ struct MemoCardView: View {
             }
             Button {
                 withAnimation(AppTheme.spring) { memo.isPinned.toggle() }
-                AppNotifications.postMemoDataChanged()
+                persistAndNotify()
             } label: {
                 Label(
                     memo.isPinned ? "取消置顶" : "置顶",
@@ -158,6 +158,15 @@ struct MemoCardView: View {
                     .contentShape(Capsule())
                 }
             }
+        }
+    }
+
+    private func persistAndNotify() {
+        do {
+            try modelContext.save()
+            AppNotifications.postMemoDataChanged()
+        } catch {
+            print("MemoCardView save failed: \(error)")
         }
     }
 }

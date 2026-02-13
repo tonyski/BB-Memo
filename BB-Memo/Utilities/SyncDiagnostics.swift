@@ -66,33 +66,37 @@ enum AppContainerFactory {
                     startupMessage: cloudErrorMessage
                 )
             } catch let localError {
-                // 模型变更导致旧数据不兼容时，清除旧数据重试（本地配置）
-                let url = localConfiguration.url
-                try? FileManager.default.removeItem(at: url)
-                try? FileManager.default.removeItem(at: url.appendingPathExtension("wal"))
-                try? FileManager.default.removeItem(at: url.appendingPathExtension("shm"))
-                do {
-                    let container = try ModelContainer(for: schema, configurations: [localConfiguration])
-                    return AppContainerBootstrap(
-                        container: container,
-                        storageMode: .localFallback,
-                        startupMessage: "\(cloudErrorMessage)；本地恢复：\(localError.localizedDescription)"
-                    )
-                } catch let retryError {
-                    do {
-                        let container = try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
-                        return AppContainerBootstrap(
-                            container: container,
-                            storageMode: .inMemoryFallback,
-                            startupMessage: "\(cloudErrorMessage)；本地失败：\(retryError.localizedDescription)"
-                        )
-                    } catch {
-                        fatalError(
-                            "Could not create ModelContainer. cloudError=\(cloudError), localError=\(localError), retryError=\(retryError), inMemoryError=\(error)"
-                        )
-                    }
-                }
+                return makeInMemoryBootstrap(
+                    schema: schema,
+                    inMemoryConfiguration: inMemoryConfiguration,
+                    startupMessage: "\(cloudErrorMessage)；本地失败：\(localError.localizedDescription)。已保留本地数据库文件，未执行自动清理。",
+                    cloudError: cloudError,
+                    localError: localError
+                )
             }
+        }
+    }
+
+    private static func makeInMemoryBootstrap(
+        schema: Schema,
+        inMemoryConfiguration: ModelConfiguration,
+        startupMessage: String,
+        cloudError: Error,
+        localError: Error,
+        retryError: Error? = nil
+    ) -> AppContainerBootstrap {
+        do {
+            let container = try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
+            return AppContainerBootstrap(
+                container: container,
+                storageMode: .inMemoryFallback,
+                startupMessage: startupMessage
+            )
+        } catch {
+            let retryPart = retryError.map { ", retryError=\($0)" } ?? ""
+            fatalError(
+                "Could not create ModelContainer. cloudError=\(cloudError), localError=\(localError)\(retryPart), inMemoryError=\(error)"
+            )
         }
     }
 }

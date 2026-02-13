@@ -9,11 +9,10 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 import CloudKit
+import CoreData
 
 /// 设置页面 — 展示 iCloud 同步状态
 struct SettingsView: View {
-    @Query private var memos: [Memo]
-    @Query private var tags: [Tag]
     @EnvironmentObject private var syncDiagnostics: SyncDiagnostics
 
     @Environment(\.modelContext) private var modelContext
@@ -21,19 +20,15 @@ struct SettingsView: View {
     @State private var isProcessingImport = false
     @State private var showImportAlert = false
     @State private var importMessage = ""
+    @State private var memoCount = 0
+    @State private var tagCount = 0
+    @State private var remindersCount = 0
+    @State private var lastLocalUpdateDate: Date?
 
     private let syncInsightColumns = [
         GridItem(.flexible(), spacing: 8),
         GridItem(.flexible(), spacing: 8)
     ]
-
-    private var remindersCount: Int {
-        memos.filter { $0.reminderDate != nil }.count
-    }
-
-    private var lastLocalUpdateDate: Date? {
-        memos.map(\.updatedAt).max()
-    }
 
     var body: some View {
         #if os(macOS)
@@ -77,7 +72,16 @@ struct SettingsView: View {
                 .transition(.opacity)
             }
         }
-        .task { await syncDiagnostics.refreshAccountStatus() }
+        .task {
+            await syncDiagnostics.refreshAccountStatus()
+            refreshDataOverview()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .memoDataChanged)) { _ in
+            refreshDataOverview()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange)) { _ in
+            refreshDataOverview()
+        }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.html],
@@ -176,8 +180,8 @@ struct SettingsView: View {
                 panelTitle("数据概览", icon: "chart.bar")
 
                 HStack(spacing: 8) {
-                    metricTile(icon: "doc.text", label: "Memo", value: "\(memos.count)")
-                    metricTile(icon: "tag", label: "标签", value: "\(tags.count)")
+                    metricTile(icon: "doc.text", label: "Memo", value: "\(memoCount)")
+                    metricTile(icon: "tag", label: "标签", value: "\(tagCount)")
                     metricTile(icon: "bell", label: "提醒", value: "\(remindersCount)")
                 }
 
@@ -349,7 +353,30 @@ struct SettingsView: View {
         } catch {
             importMessage = "导入失败: \(error.localizedDescription)"
         }
+        refreshDataOverview()
         showImportAlert = true
+    }
+
+    private func refreshDataOverview() {
+        memoCount = fetchCount(FetchDescriptor<Memo>())
+        tagCount = fetchCount(FetchDescriptor<Tag>())
+        remindersCount = fetchCount(
+            FetchDescriptor<Memo>(
+                predicate: #Predicate<Memo> { memo in
+                    memo.reminderDate != nil
+                }
+            )
+        )
+
+        var latestDescriptor = FetchDescriptor<Memo>(
+            sortBy: [SortDescriptor(\Memo.updatedAt, order: .reverse)]
+        )
+        latestDescriptor.fetchLimit = 1
+        lastLocalUpdateDate = (try? modelContext.fetch(latestDescriptor).first?.updatedAt) ?? nil
+    }
+
+    private func fetchCount<T: PersistentModel>(_ descriptor: FetchDescriptor<T>) -> Int {
+        (try? modelContext.fetchCount(descriptor)) ?? 0
     }
 
     // MARK: - 同步状态映射
