@@ -64,6 +64,9 @@ struct AISuggestionBar: View {
             .padding(.horizontal, AppTheme.Layout.screenPadding)
             .padding(.vertical, 10)
         }
+        .transaction { transaction in
+            transaction.animation = nil
+        }
         Divider().opacity(0.5)
     }
 }
@@ -80,12 +83,8 @@ struct TagPickerSheet: View {
     private struct DisplayTag: Identifiable {
         let key: String
         let name: String
-        let usageCount: Int
 
         var id: String { key }
-        var title: String {
-            usageCount > 0 ? "#\(name) \(usageCount)" : "#\(name)"
-        }
     }
 
     init(
@@ -146,13 +145,13 @@ struct TagPickerSheet: View {
             let key = normalized.lowercased()
             guard !key.isEmpty else { continue }
             if seen.insert(key).inserted {
-                result.append(DisplayTag(key: key, name: tag.name, usageCount: max(0, tag.usageCount)))
+                result.append(DisplayTag(key: key, name: tag.name))
             }
         }
 
         let extras = selectedTagsByKey
             .filter { !seen.contains($0.key) }
-            .map { DisplayTag(key: $0.key, name: $0.value, usageCount: 0) }
+            .map { DisplayTag(key: $0.key, name: $0.value) }
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
         result.append(contentsOf: extras)
 
@@ -178,8 +177,8 @@ struct TagPickerSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 6) {
                         TextField("输入标签名，例如：工作", text: $input)
                             .autocorrectionDisabled()
                             #if os(iOS)
@@ -190,8 +189,8 @@ struct TagPickerSheet: View {
                                 submitInputTag()
                             }
                             .font(.system(.body, design: AppTheme.Layout.fontDesign))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
                             .background(inputFieldBackgroundColor)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
 
@@ -199,11 +198,11 @@ struct TagPickerSheet: View {
                             submitInputTag()
                         } label: {
                             Text("添加")
-                                .font(.system(size: 14, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                                .font(.system(size: 13, weight: .semibold, design: AppTheme.Layout.fontDesign))
                                 .foregroundStyle(AppTheme.onBrandAccent)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .frame(minWidth: 54)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 7)
+                                .frame(minWidth: 50)
                                 .background(
                                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                                         .fill(addButtonBackgroundColor)
@@ -215,47 +214,42 @@ struct TagPickerSheet: View {
                     }
 
                     if !displayTags.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("标签")
-                                .font(.system(size: 12, weight: .medium, design: AppTheme.Layout.fontDesign))
-                                .foregroundStyle(.secondary)
+                        Text("标签")
+                            .font(.system(size: 12, weight: .medium, design: AppTheme.Layout.fontDesign))
+                            .foregroundStyle(.secondary)
 
-                            LazyVGrid(
-                                columns: [GridItem(.adaptive(minimum: 84), spacing: 8)],
-                                alignment: .leading,
-                                spacing: 8
-                            ) {
-                                ForEach(displayTags) { tag in
-                                    let isSelected = selectedTagKeys.contains(tag.key)
-                                    Button {
-                                        onToggle(tag.name)
-                                    } label: {
-                                        Text(tag.title)
-                                            .font(.system(size: 13, weight: .semibold, design: AppTheme.Layout.fontDesign))
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 6)
-                                            .background(
-                                                isSelected
-                                                ? AppTheme.brandAccent.opacity(0.15)
-                                                : Color.secondary.opacity(0.1)
-                                            )
-                                            .foregroundStyle(
-                                                isSelected ? AppTheme.brandAccent : Color.secondary
-                                            )
-                                            .clipShape(Capsule())
-                                    }
-                                    .buttonStyle(.plain)
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 72), spacing: 6)],
+                            alignment: .leading,
+                            spacing: 6
+                        ) {
+                            ForEach(displayTags) { tag in
+                                let isSelected = selectedTagKeys.contains(tag.key)
+                                Button {
+                                    onToggle(tag.name)
+                                } label: {
+                                    Text("#\(tag.name)")
+                                        .font(.system(size: 12, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(
+                                            isSelected
+                                            ? AppTheme.brandAccent.opacity(0.15)
+                                            : Color.secondary.opacity(0.1)
+                                        )
+                                        .foregroundStyle(
+                                            isSelected ? AppTheme.brandAccent : Color.secondary
+                                        )
+                                        .clipShape(Capsule())
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
-                        .padding(12)
-                        .background(Color.secondary.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                 }
                 .padding(.horizontal, AppTheme.Layout.screenPadding)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
             }
             .navigationTitle("添加标签")
             #if os(macOS)

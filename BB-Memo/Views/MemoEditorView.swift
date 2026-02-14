@@ -86,14 +86,45 @@ struct MemoEditorView: View {
             }
         }
     }
+    private var frequentTagSuggestions: [TagSuggestion] {
+        allTags
+            .sorted { lhs, rhs in
+                if lhs.usageCount != rhs.usageCount { return lhs.usageCount > rhs.usageCount }
+                return lhs.name.localizedCompare(rhs.name) == .orderedAscending
+            }
+            .prefix(3)
+            .map { TagSuggestion(name: $0.name, isAutoAdded: false) }
+    }
+
     private var mergedTagSuggestions: [TagSuggestion] {
-        var result = aiSuggestions
-        let existingLower = Set(aiSuggestions.map { $0.name.lowercased() })
-        let extras = selectedTagNames
-            .filter { !existingLower.contains($0.lowercased()) }
-            .sorted()
-            .map { TagSuggestion(name: $0, isAutoAdded: false) }
-        result.append(contentsOf: extras)
+        var result: [TagSuggestion] = []
+        var seen = Set<String>()
+
+        for name in selectedTagNames.sorted() {
+            let normalized = Tag.normalize(name)
+            let key = normalized.lowercased()
+            guard !key.isEmpty else { continue }
+            if seen.insert(key).inserted {
+                result.append(TagSuggestion(name: normalized, isAutoAdded: false))
+            }
+        }
+
+        for suggestion in frequentTagSuggestions {
+            let key = Tag.normalize(suggestion.name).lowercased()
+            guard !key.isEmpty else { continue }
+            if seen.insert(key).inserted {
+                result.append(suggestion)
+            }
+        }
+
+        for suggestion in aiSuggestions {
+            let key = Tag.normalize(suggestion.name).lowercased()
+            guard !key.isEmpty else { continue }
+            if seen.insert(key).inserted {
+                result.append(suggestion)
+            }
+        }
+
         return result
     }
 
@@ -236,6 +267,7 @@ struct MemoEditorView: View {
                 activeSheet = .tagPicker
             }
             .animation(nil, value: selectedTagNames)
+            .animation(nil, value: mergedTagSuggestions.map(\.id))
 
             if memo == nil {
                 HStack(spacing: 10) {
@@ -311,9 +343,6 @@ struct MemoEditorView: View {
         let canonicalName = canonicalTagName(for: raw)
         guard !canonicalName.isEmpty else { return }
         selectedTagNames.insert(canonicalName)
-        if aiSuggestions.firstIndex(where: { $0.name.caseInsensitiveCompare(canonicalName) == .orderedSame }) == nil {
-            aiSuggestions.insert(TagSuggestion(name: canonicalName, isAutoAdded: false), at: 0)
-        }
     }
 
     private func toggleTagByName(_ raw: String) {
