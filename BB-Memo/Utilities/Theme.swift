@@ -89,7 +89,7 @@ extension View {
 struct GhostButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .frame(width: 40, height: 40)
+            .frame(width: 44, height: 44)
             .contentShape(Rectangle())
             .opacity(configuration.isPressed ? 0.7 : 1.0)
             .scaleEffect(configuration.isPressed ? 0.92 : 1.0)
@@ -99,23 +99,3 @@ struct GhostButtonStyle: ButtonStyle {
 extension ButtonStyle where Self == GhostButtonStyle {
     static var ghost: GhostButtonStyle { .init() }
 }
-
-// MARK: - 环境扩展
-
-extension EnvironmentValues {
-    var safeAreaInsets: EdgeInsets {
-        #if os(iOS)
-        let keyWindow = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }.first { $0.isKeyWindow }
-        return keyWindow?.safeAreaInsets.asEdgeInsets ?? EdgeInsets()
-        #else
-        return EdgeInsets()
-        #endif
-    }
-}
-
-#if os(iOS)
-extension UIEdgeInsets {
-    var asEdgeInsets: EdgeInsets { .init(top: top, leading: left, bottom: bottom, trailing: right) }
-}
-#endif

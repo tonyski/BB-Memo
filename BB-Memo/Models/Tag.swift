@@ -32,4 +32,13 @@ final class Tag: Identifiable {
         raw.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
     }
+
+    var stableSortKey: String {
+        normalizedName.isEmpty ? Tag.normalize(name).lowercased() : normalizedName
+    }
+
+    static func stableDisplayOrder(_ lhs: Tag, _ rhs: Tag) -> Bool {
+        if lhs.stableSortKey != rhs.stableSortKey { return lhs.stableSortKey < rhs.stableSortKey }
+        return lhs.createdAt < rhs.createdAt
+    }
 }

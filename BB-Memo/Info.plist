@@ -4,6 +4,11 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>BB Memo</string>
 	<key>CFBundleExecutable</key>
@@ -24,6 +29,10 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择图片并提取文字到你的想法内容。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于打开相机实时扫描图片中的文字并导入到你的想法内容。</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>UIApplicationSceneManifest</key>

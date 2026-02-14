@@ -19,6 +19,9 @@ final class Memo {
     var createdAt: Date = Foundation.Date.now
     var updatedAt: Date = Foundation.Date.now
     var isPinned: Bool = false
+    /// 兼容旧版本字段；业务逻辑请统一使用 `deletedAt` 判定是否在回收站。
+    var isDeleted: Bool = false
+    var deletedAt: Date?
     var reminderDate: Date?
     var sourceType: String?
     var sourceIdentifier: String?
@@ -29,9 +32,11 @@ final class Memo {
     
     /// 判断内容是否为长文本
     var isLong: Bool { content.count > 180 }
-    var tagsList: [Tag] { tags ?? [] }
+    var tagsList: [Tag] { (tags ?? []).sorted(by: Tag.stableDisplayOrder) }
     /// 稳定提醒标识，避免依赖持久化层内部 ID
     var reminderIdentifier: String { stableID.uuidString }
+    /// 回收站状态判定（单一可信来源）
+    var isInRecycleBin: Bool { deletedAt != nil }
     /// 导入/同步幂等键
     var importIdentity: String {
         Memo.makeImportIdentity(
@@ -49,18 +54,23 @@ final class Memo {
         createdAt: Date = .now,
         updatedAt: Date = .now,
         isPinned: Bool = false,
+        isDeleted: Bool = false,
+        deletedAt: Date? = nil,
         reminderDate: Date? = nil,
         sourceType: String? = nil,
         sourceIdentifier: String? = nil,
         importedAt: Date? = nil,
         tags: [Tag] = []
     ) {
+        let resolvedDeletedAt = deletedAt ?? (isDeleted ? updatedAt : nil)
         self.stableID = stableID
         self.content = content
         self.contentHash = Memo.computeContentHash(for: content)
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.isPinned = isPinned
+        self.isDeleted = resolvedDeletedAt != nil
+        self.deletedAt = resolvedDeletedAt
         self.reminderDate = reminderDate
         self.sourceType = sourceType
         self.sourceIdentifier = sourceIdentifier
@@ -113,6 +123,14 @@ enum MemoMaintenance {
             }
             if memo.updatedAt < memo.createdAt {
                 memo.updatedAt = memo.createdAt
+                hasChanges = true
+            }
+            if memo.isDeleted && memo.deletedAt == nil {
+                memo.deletedAt = memo.updatedAt
+                hasChanges = true
+            }
+            if memo.deletedAt != nil && !memo.isDeleted {
+                memo.isDeleted = true
                 hasChanges = true
             }
         }

@@ -77,6 +77,17 @@ struct TagPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var input = ""
 
+    private struct DisplayTag: Identifiable {
+        let key: String
+        let name: String
+        let usageCount: Int
+
+        var id: String { key }
+        var title: String {
+            usageCount > 0 ? "#\(name) \(usageCount)" : "#\(name)"
+        }
+    }
+
     init(
         allTags: [Tag],
         selectedTagNames: Binding<Set<String>>,
@@ -115,18 +126,37 @@ struct TagPickerSheet: View {
         )
     }
 
-    private var selectedNamesSorted: [String] {
-        selectedTagNames
-            .map { Tag.normalize($0) }
-            .filter { !$0.isEmpty }
-            .reduce(into: [String: String]()) { map, name in
-                let key = name.lowercased()
-                if map[key] == nil {
-                    map[key] = name
-                }
+    private var selectedTagsByKey: [String: String] {
+        selectedTagNames.reduce(into: [String: String]()) { map, name in
+            let normalized = Tag.normalize(name)
+            guard !normalized.isEmpty else { return }
+            let key = normalized.lowercased()
+            if map[key] == nil {
+                map[key] = normalized
             }
-            .values
-            .sorted { $0.localizedCompare($1) == .orderedAscending }
+        }
+    }
+
+    private var displayTags: [DisplayTag] {
+        var result: [DisplayTag] = []
+        var seen = Set<String>()
+
+        for tag in frequentTags {
+            let normalized = Tag.normalize(tag.name)
+            let key = normalized.lowercased()
+            guard !key.isEmpty else { continue }
+            if seen.insert(key).inserted {
+                result.append(DisplayTag(key: key, name: tag.name, usageCount: max(0, tag.usageCount)))
+            }
+        }
+
+        let extras = selectedTagsByKey
+            .filter { !seen.contains($0.key) }
+            .map { DisplayTag(key: $0.key, name: $0.value, usageCount: 0) }
+            .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+        result.append(contentsOf: extras)
+
+        return result
     }
 
     private var inputFieldBackgroundColor: Color {
@@ -135,6 +165,14 @@ struct TagPickerSheet: View {
         #else
         return Color.secondary.opacity(0.08)
         #endif
+    }
+
+    private var isAddButtonDisabled: Bool {
+        normalizedInput.isEmpty
+    }
+
+    private var addButtonBackgroundColor: Color {
+        isAddButtonDisabled ? AppTheme.brandAccent.opacity(0.45) : AppTheme.brandAccent
     }
 
     var body: some View {
@@ -162,17 +200,23 @@ struct TagPickerSheet: View {
                         } label: {
                             Text("添加")
                                 .font(.system(size: 14, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                                .foregroundStyle(AppTheme.onBrandAccent)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
+                                .frame(minWidth: 54)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(addButtonBackgroundColor)
+                                )
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(AppTheme.brandAccent)
-                        .disabled(normalizedInput.isEmpty)
+                        .buttonStyle(.plain)
+                        .disabled(isAddButtonDisabled)
+                        .opacity(isAddButtonDisabled ? 0.8 : 1)
                     }
 
-                    if !selectedNamesSorted.isEmpty {
+                    if !displayTags.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("已选标签")
+                            Text("标签")
                                 .font(.system(size: 12, weight: .medium, design: AppTheme.Layout.fontDesign))
                                 .foregroundStyle(.secondary)
 
@@ -181,45 +225,12 @@ struct TagPickerSheet: View {
                                 alignment: .leading,
                                 spacing: 8
                             ) {
-                                ForEach(selectedNamesSorted, id: \.self) { name in
-                                    Button {
-                                        onToggle(name)
-                                    } label: {
-                                        Text("#\(name)")
-                                            .font(.system(size: 13, weight: .semibold, design: AppTheme.Layout.fontDesign))
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 6)
-                                            .background(AppTheme.brandAccent.opacity(0.15))
-                                            .foregroundStyle(AppTheme.brandAccent)
-                                            .clipShape(Capsule())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                        .padding(12)
-                        .background(Color.secondary.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                    }
-
-                    if !frequentTags.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("常用标签")
-                                .font(.system(size: 12, weight: .medium, design: AppTheme.Layout.fontDesign))
-                                .foregroundStyle(.secondary)
-
-                            LazyVGrid(
-                                columns: [GridItem(.adaptive(minimum: 84), spacing: 8)],
-                                alignment: .leading,
-                                spacing: 8
-                            ) {
-                                ForEach(frequentTags) { tag in
-                                    let key = Tag.normalize(tag.name).lowercased()
-                                    let isSelected = selectedTagKeys.contains(key)
+                                ForEach(displayTags) { tag in
+                                    let isSelected = selectedTagKeys.contains(tag.key)
                                     Button {
                                         onToggle(tag.name)
                                     } label: {
-                                        Text("#\(tag.name) \(tag.usageCount)")
+                                        Text(tag.title)
                                             .font(.system(size: 13, weight: .semibold, design: AppTheme.Layout.fontDesign))
                                             .padding(.horizontal, 12)
                                             .padding(.vertical, 6)
@@ -264,42 +275,6 @@ struct TagPickerSheet: View {
         guard !normalizedInput.isEmpty else { return }
         onCreate(normalizedInput)
         input = ""
-    }
-}
-
-// MARK: - 标签解析工具
-
-enum MemoTagResolver {
-    /// 根据选中的标签名，匹配已有 Tag 或创建新 Tag
-    static func resolveTags(
-        selectedNames: Set<String>,
-        allTags: [Tag],
-        context: ModelContext
-    ) -> [Tag] {
-        var existingByNormalized: [String: Tag] = [:]
-        for tag in allTags {
-            let key = tag.normalizedName.isEmpty ? Tag.normalize(tag.name).lowercased() : tag.normalizedName
-            existingByNormalized[key] = tag
-        }
-
-        var resolved: [Tag] = []
-        var seen = Set<String>()
-        for rawName in selectedNames.sorted() {
-            let displayName = Tag.normalize(rawName)
-            guard !displayName.isEmpty else { continue }
-            let normalized = displayName.lowercased()
-            guard seen.insert(normalized).inserted else { continue }
-
-            if let existing = existingByNormalized[normalized] {
-                resolved.append(existing)
-            } else {
-                let tag = Tag(name: displayName)
-                context.insert(tag)
-                existingByNormalized[normalized] = tag
-                resolved.append(tag)
-            }
-        }
-        return resolved
     }
 }
 

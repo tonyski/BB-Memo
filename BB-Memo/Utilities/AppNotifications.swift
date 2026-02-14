@@ -13,6 +13,12 @@ extension Notification.Name {
 
 enum AppNotifications {
     static func postMemoDataChanged() {
-        NotificationCenter.default.post(name: .memoDataChanged, object: nil)
+        if Thread.isMainThread {
+            NotificationCenter.default.post(name: .memoDataChanged, object: nil)
+        } else {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .memoDataChanged, object: nil)
+            }
+        }
     }
 }

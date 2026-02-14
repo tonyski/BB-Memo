@@ -31,11 +31,11 @@ enum AppStorageMode: Equatable {
     var label: String {
         switch self {
         case .cloudKit:
-            return "CloudKit（可同步）"
+            return "云端同步（推荐）"
         case .localFallback:
-            return "本地数据库（未同步）"
+            return "仅保存在本机"
         case .inMemoryFallback:
-            return "内存数据库（临时）"
+            return "临时模式（退出后清空）"
         }
     }
 }
@@ -147,13 +147,13 @@ final class SyncDiagnostics: ObservableObject {
         switch storageMode {
         case .cloudKit:
             if accountStatus == .available {
-                return "CloudKit 运行正常，数据会后台同步"
+                return "云同步已开启，内容会自动同步到你的其他设备。"
             }
-            return "CloudKit 已启用，但当前账号状态阻塞同步"
+            return "已开启云同步，但当前账号状态异常，暂时无法同步。"
         case .localFallback:
-            return "当前使用本地数据库，卸载 App 会丢失本地数据"
+            return "当前仅保存在本机，内容不会同步到其他设备。"
         case .inMemoryFallback:
-            return "当前使用临时内存数据库，退出 App 即丢失"
+            return "当前是临时模式，退出应用后数据不会保留。"
         }
     }
 
@@ -190,7 +190,7 @@ final class SyncDiagnostics: ObservableObject {
         await refreshAccountStatus()
 
         guard storageMode == .cloudKit else {
-            appendLog(level: .warning, "当前不是 CloudKit 模式，无法执行跨设备同步")
+            appendLog(level: .warning, "当前不是云同步模式，无法执行跨设备同步")
             return
         }
         guard accountStatus == .available else {
@@ -200,7 +200,7 @@ final class SyncDiagnostics: ObservableObject {
 
         do {
             try context.save()
-            appendLog(level: .success, "本地事务提交成功，CloudKit 将在后台同步")
+            appendLog(level: .success, "本次更改已保存，稍后会自动同步到云端")
         } catch {
             appendLog(level: .error, "本地事务提交失败：\(error.localizedDescription)")
         }
@@ -231,11 +231,11 @@ final class SyncDiagnostics: ObservableObject {
 
     private func accountStatusLabel(_ status: CKAccountStatus) -> String {
         switch status {
-        case .available: return "可用"
+        case .available: return "已连接"
         case .noAccount: return "未登录 iCloud"
-        case .restricted: return "受限制"
-        case .temporarilyUnavailable: return "暂时不可用"
-        case .couldNotDetermine: return "无法判断"
+        case .restricted: return "系统限制"
+        case .temporarilyUnavailable: return "服务暂不可用"
+        case .couldNotDetermine: return "检查失败"
         @unknown default: return "未知状态"
         }
     }

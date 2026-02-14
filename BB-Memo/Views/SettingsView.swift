@@ -10,6 +10,7 @@ import SwiftData
 import UniformTypeIdentifiers
 import CloudKit
 import CoreData
+import Combine
 
 /// 设置页面 — 展示 iCloud 同步状态
 struct SettingsView: View {
@@ -76,10 +77,10 @@ struct SettingsView: View {
             await syncDiagnostics.refreshAccountStatus()
             refreshDataOverview()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .memoDataChanged)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .memoDataChanged).receive(on: RunLoop.main)) { _ in
             refreshDataOverview()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)) { _ in
             refreshDataOverview()
         }
         .fileImporter(
@@ -102,37 +103,62 @@ struct SettingsView: View {
         panelContainer(borderColor: syncIndicatorColor.opacity(0.28)) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
-                    panelTitle("同步中心", icon: "icloud")
+                    panelTitle("云端同步", icon: "icloud")
                     Spacer()
                     Button {
                         Task { await syncDiagnostics.triggerManualSync(using: modelContext) }
                     } label: {
                         if syncDiagnostics.isManualSyncInProgress {
-                            ProgressView().controlSize(.small)
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("同步中")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                            }
                         } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 13, weight: .semibold))
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text("立即同步")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                            }
                         }
                     }
                     .buttonStyle(.plain)
-                    .padding(6)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
                     .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .foregroundStyle(syncDiagnostics.isManualSyncInProgress ? .secondary : AppTheme.brandAccent)
                     .disabled(syncDiagnostics.isManualSyncInProgress)
+                    .accessibilityLabel("立即同步")
+                    .accessibilityHint("马上检查账号并尝试同步到云端")
                 }
 
                 LazyVGrid(columns: syncInsightColumns, spacing: 8) {
-                    insightTile(title: "存储模式", value: syncDiagnostics.storageMode.label)
-                    insightTile(title: "账号状态", value: accountStatusLabel)
+                    insightTile(title: "同步方式", value: syncDiagnostics.storageMode.label)
+                    insightTile(title: "账号连接", value: accountStatusLabel)
                     insightTile(
-                        title: "最近检查",
-                        value: syncDiagnostics.lastStatusCheckDate?.formatted(.relative(presentation: .named)) ?? "未检查"
+                        title: "上次检查",
+                        value: syncDiagnostics.lastStatusCheckDate?.formatted(
+                            .relative(presentation: .named).locale(.autoupdatingCurrent)
+                        ) ?? "未检查"
                     )
-                    insightTile(title: "最近手动同步", value: syncDiagnostics.lastManualSyncDate?.formatted(.relative(presentation: .named)) ?? "未执行")
+                    insightTile(
+                        title: "上次同步",
+                        value: syncDiagnostics.lastManualSyncDate?.formatted(
+                            .relative(presentation: .named).locale(.autoupdatingCurrent)
+                        ) ?? "未执行"
+                    )
                 }
 
+                Text(syncDiagnostics.syncSummary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 if !diagnosticMessages.isEmpty {
-                    DisclosureGroup("诊断详情") {
+                    DisclosureGroup("同步说明") {
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(Array(diagnosticMessages.enumerated()), id: \.offset) { _, message in
                                 Text("• \(message)")
@@ -154,7 +180,9 @@ struct SettingsView: View {
                             ScrollView {
                                 VStack(alignment: .leading, spacing: 6) {
                                     ForEach(syncDiagnostics.syncLogs.reversed()) { entry in
-                                        Text("\(entry.date.formatted(.dateTime.hour().minute().second())) [\(syncLogLevelLabel(entry.level))] \(entry.message)")
+                                        Text(
+                                            "\(entry.date.formatted(.dateTime.hour().minute().second().locale(.autoupdatingCurrent))) [\(syncLogLevelLabel(entry.level))] \(entry.message)"
+                                        )
                                             .font(.caption2.monospaced())
                                             .foregroundStyle(.secondary)
                                             .fixedSize(horizontal: false, vertical: true)
@@ -166,7 +194,7 @@ struct SettingsView: View {
                             .padding(.top, 4)
                         },
                         label: {
-                            Text("同步日志")
+                            Text("同步记录（高级）")
                                 .font(.caption)
                                 .fontWeight(.semibold)
                         }
@@ -180,16 +208,18 @@ struct SettingsView: View {
     private var dataOverviewPanel: some View {
         panelContainer {
             VStack(alignment: .leading, spacing: 10) {
-                panelTitle("数据概览", icon: "chart.bar")
+                panelTitle("你的数据", icon: "chart.bar")
 
                 HStack(spacing: 8) {
-                    metricTile(icon: "doc.text", label: "Memo", value: "\(memoCount)")
+                    metricTile(icon: "doc.text", label: "笔记", value: "\(memoCount)")
                     metricTile(icon: "tag", label: "标签", value: "\(tagCount)")
                     metricTile(icon: "bell", label: "提醒", value: "\(remindersCount)")
                 }
 
                 if let lastLocalUpdateDate {
-                    Text("最近更新：\(lastLocalUpdateDate.formatted(.relative(presentation: .named)))")
+                    Text(
+                        "最近一次修改：\(lastLocalUpdateDate.formatted(.relative(presentation: .named).locale(.autoupdatingCurrent)))"
+                    )
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -200,7 +230,7 @@ struct SettingsView: View {
     private var dataManagementPanel: some View {
         panelContainer {
             VStack(alignment: .leading, spacing: 8) {
-                panelTitle("数据管理", icon: "square.and.arrow.down")
+                panelTitle("导入与备份", icon: "square.and.arrow.down")
 
                 Button {
                     isImporting = true
@@ -216,7 +246,7 @@ struct SettingsView: View {
                         }
                         .foregroundStyle(AppTheme.brandAccent)
 
-                        Text(isProcessingImport ? "正在导入 flomo..." : "从 flomo 导入 (.html)")
+                        Text(isProcessingImport ? "正在导入 flomo..." : "导入 flomo 备份（HTML 文件）")
                             .font(.footnote)
                             .foregroundStyle(.primary)
 
@@ -239,8 +269,8 @@ struct SettingsView: View {
     private var appInfoPanel: some View {
         panelContainer {
             VStack(alignment: .leading, spacing: 8) {
-                panelTitle("应用信息", icon: "info.circle")
-                infoRow(label: "版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
+                panelTitle("关于 BB Memo", icon: "info.circle")
+                infoRow(label: "当前版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
             }
         }
     }
@@ -326,8 +356,8 @@ struct SettingsView: View {
 
     private func handleImport(result: Result<[URL], Error>) {
         guard case .success(let urls) = result, let url = urls.first else {
-            if case .failure(let error) = result {
-                importMessage = "文件选择失败: \(error.localizedDescription)"
+            if case .failure = result {
+                importMessage = "没有成功选择文件，请重试。"
                 showImportAlert = true
             }
             return
@@ -338,13 +368,18 @@ struct SettingsView: View {
 
     private func performImport(from url: URL) async {
         defer { isProcessingImport = false }
+        var didImportSucceed = false
         do {
             let summary = try await FlomoImportService.importFromFile(at: url, context: modelContext)
+            didImportSucceed = true
             importMessage = summary.importedCount == 0
-                ? "未在文件中找到可识别的 flomo 记录"
-                : "已成功迁移 \(summary.importedCount) 条思考到 BB Memo"
+                ? "未在文件中找到可识别的 flomo 笔记"
+                : "已导入 \(summary.importedCount) 条笔记"
         } catch {
-            importMessage = "导入失败: \(error.localizedDescription)"
+            importMessage = "导入失败，请稍后再试。"
+        }
+        if didImportSucceed {
+            AppNotifications.postMemoDataChanged()
         }
         refreshDataOverview()
         showImportAlert = true
@@ -386,15 +421,15 @@ struct SettingsView: View {
     private var accountStatusLabel: String {
         switch syncDiagnostics.accountStatus {
         case .available:
-            return "可用"
+            return "已连接"
         case .noAccount:
             return "未登录 iCloud"
         case .restricted:
-            return "受限制"
+            return "系统限制"
         case .temporarilyUnavailable:
-            return "暂时不可用"
+            return "服务暂不可用"
         case .couldNotDetermine:
-            return "无法判断"
+            return "检查失败"
         @unknown default:
             return "未知状态"
         }
@@ -407,13 +442,20 @@ struct SettingsView: View {
     private var diagnosticMessages: [String] {
         var messages: [String] = []
         if !isSyncHealthy {
-            messages.append("仅当存储模式为 CloudKit 且账号可用时，数据才会跨设备同步。")
+            messages.append("当前无法跨设备同步，请先确认已登录 iCloud，并允许 BB Memo 使用 iCloud。")
         }
         if let startupMessage = syncDiagnostics.startupMessage, !startupMessage.isEmpty {
-            messages.append(startupMessage)
+            switch syncDiagnostics.storageMode {
+            case .cloudKit:
+                messages.append("云同步已恢复，你的数据会继续自动同步。")
+            case .localFallback:
+                messages.append("云同步暂时不可用，应用已切换为本机保存。")
+            case .inMemoryFallback:
+                messages.append("当前处于临时模式，请稍后重启应用再试。")
+            }
         }
         if let accountStatusMessage = syncDiagnostics.accountStatusMessage, !accountStatusMessage.isEmpty {
-            messages.append("账号检查失败：\(accountStatusMessage)")
+            messages.append("当前无法获取 iCloud 状态，请稍后再试。")
         }
         return messages
     }

@@ -30,13 +30,12 @@ struct BB_MemoApp: App {
         WindowGroup {
             ContentView()
                 .task {
-                    DispatchQueue.global(qos: .utility).async {
-                        AppDataMaintenance.runOnLaunch(container: sharedModelContainer)
-                    }
+                    AppDataMaintenance.runOnLaunchIfNeeded(container: sharedModelContainer)
                 }
                 .task {
                     await syncDiagnostics.refreshAccountStatus()
                 }
+                .environment(\.locale, .autoupdatingCurrent)
                 .environmentObject(syncDiagnostics)
                 #if os(macOS)
                 .frame(minWidth: 700, minHeight: 500)
@@ -49,17 +48,26 @@ struct BB_MemoApp: App {
     }
 }
 
-/// 启动维护任务：修复派生字段、标签去重、计数校准
+/// 启动维护任务：修复派生字段并校准标签计数
 private enum AppDataMaintenance {
-    static func runOnLaunch(container: ModelContainer) {
+    private static let runLock = NSLock()
+    private static var hasRunOnLaunch = false
+
+    @MainActor
+    static func runOnLaunchIfNeeded(container: ModelContainer) {
+        let shouldRun: Bool = {
+            runLock.lock()
+            defer { runLock.unlock() }
+            guard !hasRunOnLaunch else { return false }
+            hasRunOnLaunch = true
+            return true
+        }()
+        guard shouldRun else { return }
+
         let context = ModelContext(container)
         do {
             try MemoMaintenance.backfillDerivedFields(in: context)
-            let mergedCount = try TagDeduplicator.mergeDuplicates(in: context)
             try TagUsageCounter.resyncAll(in: context)
-            if mergedCount > 0 {
-                print("AppDataMaintenance: merged \(mergedCount) duplicate tags.")
-            }
         } catch {
             print("AppDataMaintenance failed: \(error)")
         }

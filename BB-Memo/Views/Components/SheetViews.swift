@@ -29,7 +29,11 @@ struct SettingsSheetView: View {
 extension View {
     func memoEditorSheetPresentation() -> some View {
         self
+            #if os(iOS)
+            .presentationDetents([.large])
+            #else
             .presentationDetents([.medium, .large])
+            #endif
             .presentationDragIndicator(.visible)
     }
 }

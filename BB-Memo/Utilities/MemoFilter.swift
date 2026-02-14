@@ -10,8 +10,16 @@ import SwiftData
 enum MemoFilter {
 
     static func sort(_ memos: [Memo]) -> [Memo] {
-        memos.sorted { lhs, rhs in
+        memos.sorted { (lhs: Memo, rhs: Memo) in
             if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
+            if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
+            return String(describing: lhs.persistentModelID) > String(describing: rhs.persistentModelID)
+        }
+    }
+
+    static func sortRecycleBin(_ memos: [Memo]) -> [Memo] {
+        memos.sorted { (lhs: Memo, rhs: Memo) in
+            if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
             if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
             return String(describing: lhs.persistentModelID) > String(describing: rhs.persistentModelID)
         }
@@ -21,11 +29,13 @@ enum MemoFilter {
     static func apply(
         _ memos: [Memo],
         tag: Tag? = nil,
-        searchText: String = ""
+        searchText: String = "",
+        includeDeleted: Bool = false
     ) -> [Memo] {
         sort(
             memos.filter { memo in
-                matchesTag(memo, tag: tag) && matchesSearch(memo, searchText: searchText)
+                if !includeDeleted && memo.isInRecycleBin { return false }
+                return matchesTag(memo, tag: tag) && matchesSearch(memo, searchText: searchText)
             }
         )
     }

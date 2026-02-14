@@ -17,7 +17,7 @@ enum FlomoImportService {
         var errorDescription: String? {
             switch self {
             case .permissionDenied:
-                return "无法获取文件访问权限"
+                return "无法读取该文件，请重新选择。"
             }
         }
     }
@@ -76,12 +76,20 @@ enum FlomoImportService {
                 tags: tags
             )
             context.insert(newMemo)
-            MemoTagRelationshipSync.synchronizeTagBackReferences(for: newMemo, oldTags: [], newTags: tags)
-            TagUsageCounter.increment(tags)
             importedCount += 1
         }
 
-        try context.save()
+        do {
+            try context.save()
+        } catch {
+            context.rollback()
+            throw error
+        }
+        do {
+            try TagUsageCounter.resyncAll(in: context)
+        } catch {
+            print("FlomoImportService tag resync failed: \(error)")
+        }
         return Summary(importedCount: importedCount)
     }
 

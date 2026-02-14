@@ -34,6 +34,8 @@ struct ContentView: View {
                             .clipShape(Circle())
                             .shadow(color: AppTheme.brandAccent.opacity(0.3), radius: 10, y: 5)
                     }
+                    .accessibilityLabel("新建笔记")
+                    .accessibilityHint("打开编辑器，新建一条笔记")
                     .padding(.bottom, 24)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -63,14 +65,46 @@ struct MacContentView: View {
 
     @Binding var showComposer: Bool
     @State private var selectedTag: Tag?
+    @State private var isRecycleBinSelected = false
     @State private var memoToEdit: Memo?
     @State private var searchText = ""
+    @State private var tagSearchText = ""
+    @State private var isTagSearchExpanded = false
+    @FocusState private var isTagSearchFocused: Bool
 
     @State private var showSettings = false
     @State private var tagPendingDeletion: Tag?
 
     private var filteredMemos: [Memo] {
-        MemoFilter.apply(memos, tag: selectedTag, searchText: searchText)
+        if isRecycleBinSelected {
+            let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let recycled = memos.filter { $0.isInRecycleBin }
+            let matched: [Memo]
+            if keyword.isEmpty {
+                matched = recycled
+            } else {
+                matched = recycled.filter {
+                    $0.content.localizedCaseInsensitiveContains(keyword)
+                    || $0.tagsList.contains { $0.name.localizedCaseInsensitiveContains(keyword) }
+                }
+            }
+            return MemoFilter.sortRecycleBin(matched)
+        }
+        return MemoFilter.apply(memos, tag: selectedTag, searchText: searchText)
+    }
+
+    private var activeMemoCount: Int {
+        memos.count(where: { !$0.isInRecycleBin })
+    }
+
+    private var deletedMemoCount: Int {
+        memos.count(where: { $0.isInRecycleBin })
+    }
+
+    private var filteredTags: [Tag] {
+        let keyword = tagSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { return allTags }
+        return allTags.filter { $0.name.localizedCaseInsensitiveContains(keyword) }
     }
 
     var body: some View {
@@ -79,7 +113,7 @@ struct MacContentView: View {
         } detail: {
             memoDetail
         }
-        .searchable(text: $searchText, prompt: "搜索内容或标签")
+        .searchable(text: $searchText, prompt: "搜索笔记内容或标签")
         .sheet(isPresented: $showComposer) {
             MemoEditorSheetView(memo: nil)
         }
@@ -88,6 +122,11 @@ struct MacContentView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsSheetView()
+        }
+        .onAppear {
+            DispatchQueue.main.async {
+                isTagSearchFocused = false
+            }
         }
         .confirmationDialog(
             "删除标签？",
@@ -101,11 +140,12 @@ struct MacContentView: View {
         ) {
             Button("删除标签", role: .destructive) {
                 guard let tagPendingDeletion else { return }
+                collapseTagSearch()
                 deleteTag(tagPendingDeletion)
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("仅移除该标签，不会删除已关联的 Memo。")
+            Text("仅移除该标签，不会删除关联笔记。")
         }
     }
 
@@ -120,12 +160,17 @@ struct MacContentView: View {
                     .fontWeight(.bold)
                     .foregroundStyle(AppTheme.brandAccent)
                 Spacer()
-                Button { showComposer = true } label: {
+                Button {
+                    collapseTagSearch()
+                    showComposer = true
+                } label: {
                     Image(systemName: "square.and.pencil")
                         .font(.system(size: 14, weight: .semibold, design: AppTheme.Layout.fontDesign))
                         .foregroundStyle(AppTheme.brandAccent)
+                        .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("新建笔记")
                 .keyboardShortcut("n", modifiers: .command)
             }
             .padding(.horizontal, 16)
@@ -133,40 +178,147 @@ struct MacContentView: View {
 
             Divider()
 
-            List {
+            VStack(alignment: .leading, spacing: 0) {
                 MacSidebarRow(
-                    title: "全部思考",
-                    count: memos.count,
-                    isSelected: selectedTag == nil,
+                    title: "全部笔记",
+                    count: activeMemoCount,
+                    isSelected: selectedTag == nil && !isRecycleBinSelected,
                     icon: "tray.full"
                 ) {
+                    collapseTagSearch()
                     selectedTag = nil
+                    isRecycleBinSelected = false
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 8)
+
+                HStack(spacing: 8) {
+                    Text("标签")
+                        .font(.system(size: 11, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                    Rectangle()
+                        .fill(.secondary.opacity(0.18))
+                        .frame(height: 1)
+                    Button {
+                        withAnimation(AppTheme.snappy) {
+                            let shouldExpand = !isTagSearchExpanded
+                            isTagSearchExpanded = shouldExpand
+                            if !shouldExpand {
+                                collapseTagSearch()
+                            }
+                        }
+                        if isTagSearchExpanded {
+                            DispatchQueue.main.async {
+                                isTagSearchFocused = true
+                            }
+                        }
+                    } label: {
+                        Image(systemName: isTagSearchExpanded ? "xmark.circle.fill" : "magnifyingglass")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isTagSearchExpanded ? "收起标签搜索" : "展开标签搜索")
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, isTagSearchExpanded ? 6 : 2)
+
+                if isTagSearchExpanded {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        TextField("搜索标签", text: $tagSearchText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13, design: AppTheme.Layout.fontDesign))
+                            .focused($isTagSearchFocused)
+                        if !tagSearchText.isEmpty {
+                            Button {
+                                tagSearchText = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("清空标签搜索")
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 6)
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
 
-                if !allTags.isEmpty {
-                    Section("标签") {
-                        ForEach(allTags) { tag in
-                            MacSidebarRow(
-                                title: tag.name,
-                                count: tag.usageCount,
-                                isSelected: selectedTag?.persistentModelID == tag.persistentModelID,
-                                icon: "#",
-                                isTag: true,
-                                onDeleteRequest: {
-                                    tagPendingDeletion = tag
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        if filteredTags.isEmpty {
+                            Text(tagSearchText.isEmpty ? "暂无标签" : "没有匹配标签")
+                                .font(.system(size: 12, design: AppTheme.Layout.fontDesign))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            ForEach(filteredTags) { tag in
+                                MacSidebarRow(
+                                    title: tag.name,
+                                    count: tag.usageCount,
+                                    isSelected: selectedTag?.persistentModelID == tag.persistentModelID,
+                                    icon: "#",
+                                    isTag: true,
+                                    onDeleteRequest: {
+                                        tagPendingDeletion = tag
+                                    }
+                                ) {
+                                    collapseTagSearch()
+                                    selectedTag = tag
+                                    isRecycleBinSelected = false
                                 }
-                            ) {
-                                selectedTag = tag
+                                .padding(.horizontal, 10)
                             }
                         }
                     }
+                    .padding(.bottom, 4)
                 }
+                .scrollIndicators(.hidden)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if isTagSearchExpanded {
+                        collapseTagSearch()
+                    }
+                }
+                MacSidebarSectionLabel(title: "工具")
+
+                MacSidebarRow(
+                    title: "回收站",
+                    count: deletedMemoCount,
+                    isSelected: isRecycleBinSelected,
+                    icon: "trash",
+                    accentColor: .orange
+                ) {
+                    collapseTagSearch()
+                    selectedTag = nil
+                    isRecycleBinSelected = true
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
             }
-            .listStyle(.sidebar)
+            .frame(maxHeight: .infinity, alignment: .top)
 
             Divider()
 
-            Button { showSettings = true } label: {
+            Button {
+                collapseTagSearch()
+                showSettings = true
+            } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "gearshape").font(.subheadline)
                     Text("设置").font(.subheadline)
@@ -188,10 +340,14 @@ struct MacContentView: View {
         Group {
             if filteredMemos.isEmpty {
                 VStack(spacing: 12) {
-                    Image(systemName: selectedTag != nil ? "tag" : "square.and.pencil")
+                    Image(systemName: selectedTag != nil ? "tag" : (isRecycleBinSelected ? "trash" : "square.and.pencil"))
                         .font(.system(size: 40))
                         .foregroundStyle(Color.secondary.opacity(0.3))
-                    Text(selectedTag != nil ? "该标签下暂无内容" : "点击 ⌘N 开始记录")
+                    Text(
+                        selectedTag != nil
+                        ? "该标签下暂无内容"
+                        : (isRecycleBinSelected ? "回收站为空" : "点击 ⌘N 新建笔记")
+                    )
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -199,11 +355,17 @@ struct MacContentView: View {
                 ScrollView {
                     LazyVStack(spacing: AppTheme.Layout.cardSpacing) {
                         ForEach(filteredMemos, id: \.persistentModelID) { memo in
-                            MemoCardView(memo: memo, onEdit: {
-                                memoToEdit = memo
-                            }, onTagTap: { tag in
-                                selectedTag = tag
-                            })
+                            MemoCardView(
+                                memo: memo,
+                                mode: isRecycleBinSelected ? .recycleBin : .normal,
+                                onEdit: isRecycleBinSelected ? nil : {
+                                    memoToEdit = memo
+                                },
+                                onTagTap: { tag in
+                                    selectedTag = tag
+                                    isRecycleBinSelected = false
+                                }
+                            )
                             .memoCardStyle()
                         }
                     }
@@ -215,12 +377,17 @@ struct MacContentView: View {
                 .background(AppTheme.background)
             }
         }
-        .navigationTitle(selectedTag.map { "# \($0.name)" } ?? "全部思考")
+        .navigationTitle(
+            isRecycleBinSelected
+            ? "回收站"
+            : (selectedTag.map { "# \($0.name)" } ?? "全部笔记")
+        )
         .toolbar {
-            if selectedTag != nil {
+            if selectedTag != nil || isRecycleBinSelected {
                 ToolbarItem {
                     Button {
                         selectedTag = nil
+                        isRecycleBinSelected = false
                     } label: {
                         Label("清除筛选", systemImage: "xmark.circle")
                     }
@@ -232,10 +399,8 @@ struct MacContentView: View {
 
     private func deleteTag(_ tag: Tag) {
         let wasSelected = selectedTag?.persistentModelID == tag.persistentModelID
-        MemoTagRelationshipSync.detachTagFromMemos(tag)
-        modelContext.delete(tag)
         do {
-            try modelContext.save()
+            try MemoMutationService.deleteTag(tag, context: modelContext)
             if wasSelected {
                 selectedTag = nil
             }
@@ -244,6 +409,12 @@ struct MacContentView: View {
             print("MacContentView deleteTag save failed: \(error)")
         }
         tagPendingDeletion = nil
+    }
+
+    private func collapseTagSearch() {
+        tagSearchText = ""
+        isTagSearchExpanded = false
+        isTagSearchFocused = false
     }
 }
 #endif
@@ -257,34 +428,41 @@ struct MacSidebarRow: View {
     let isSelected: Bool
     let icon: String
     var isTag: Bool = false
+    var accentColor: Color = AppTheme.brandAccent
     var onDeleteRequest: (() -> Void)? = nil
     let action: () -> Void
     
     var body: some View {
         Button(action: action) {
-            Label {
-                HStack {
-                    Text(title)
-                        .font(.system(size: 13, weight: isSelected ? .semibold : .regular, design: AppTheme.Layout.fontDesign))
-                    Spacer()
-                    Text("\(count)")
-                        .font(.system(size: 10, design: AppTheme.Layout.fontDesign))
-                        .foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } icon: {
+            HStack(spacing: 8) {
                 if isTag {
                     Text(icon)
                         .font(.system(size: 13, weight: .bold, design: AppTheme.Layout.fontDesign))
-                        .foregroundStyle(AppTheme.brandAccent)
+                        .foregroundStyle(isSelected ? accentColor : .secondary)
                 } else {
                     Image(systemName: icon)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(isSelected ? accentColor : .secondary)
                 }
+                Text(title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular, design: AppTheme.Layout.fontDesign))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                Spacer()
+                Text("\(count)")
+                    .font(.system(size: 10, design: AppTheme.Layout.fontDesign))
+                    .foregroundStyle(isSelected ? accentColor : Color.secondary.opacity(0.7))
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(isSelected ? accentColor.opacity(0.12) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(accentColor.opacity(isSelected ? 0.12 : 0), lineWidth: 1)
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(isSelected ? AppTheme.brandAccent.opacity(0.1) : Color.clear)
         .contextMenu {
             if isTag, let onDeleteRequest {
                 Button(role: .destructive) {
@@ -294,6 +472,24 @@ struct MacSidebarRow: View {
                 }
             }
         }
+    }
+}
+
+private struct MacSidebarSectionLabel: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold, design: AppTheme.Layout.fontDesign))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            Rectangle()
+                .fill(.secondary.opacity(0.18))
+                .frame(height: 1)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 6)
     }
 }
 #endif

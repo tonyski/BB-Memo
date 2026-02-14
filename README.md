@@ -15,7 +15,8 @@ BB Memo 是一个面向 iOS / macOS 的碎片化笔记应用，强调快速记�
 
 ### 1. 核心笔记流
 
-- 新建、编辑、删除 Memo
+- 新建、编辑、删除笔记
+- 删除后进入回收站，可恢复或彻底删除
 - 置顶逻辑：置顶内容优先展示
 - 长文本折叠展示（卡片中按长度处理）
 - iOS 首页时间线分页加载（默认每页 40 条）
@@ -25,46 +26,51 @@ BB Memo 是一个面向 iOS / macOS 的碎片化笔记应用，强调快速记�
 - 从正文自动提取 `#标签`
 - 编辑器内支持标签手动选择与新增
 - 基于 `NaturalLanguage` 的关键词标签建议（含自动建议策略）
-- 标签去重与计数维护（`normalizedName` + `usageCount`）
-- 删除标签时仅解绑关系，不删除 Memo
+- 标签规范化与计数维护（`normalizedName` + `usageCount`）
+- 删除标签时仅解绑关系，不删除笔记
 
 ### 3. 搜索与筛选
 
-- 关键词搜索：匹配 Memo 内容和标签名
+- 关键词搜索：匹配笔记内容和标签名
 - 时间范围筛选（全部、今天、近一周、近一月、近三月）
 - 搜索输入防抖（250ms）
 - 搜索结果统一按“置顶优先 + 时间倒序”排序
 
 ### 4. 提醒能力
 
-- Memo 级别提醒时间设置
+- 为每条笔记设置提醒时间
 - 本地通知调度与取消（`UserNotifications`）
 - 首次使用按需请求通知权限
 
 ### 5. flomo 导入
 
 - 支持从 flomo 导出的 `.html` 文件导入
-- 解析 HTML 为 Memo 内容 + 时间
+- 解析 HTML 为笔记内容和时间
 - 导入幂等：通过来源标识与内容哈希去重，避免重复导入
 - 导入时自动提取标签并建立关系
 
-### 6. 同步与容错
+### 6. 图片文字提取（OCR）
+
+- 编辑器支持“从相册提取文字”
+- iOS 16+ 支持“相机实时扫描”并点按导入文字
+- 识别出的文字会直接追加到当前笔记正文
+
+### 7. 同步与容错
 
 - 默认使用 SwiftData + CloudKit
 - 启动容错降级链路：
-  - `CloudKit（可同步）`
-  - `本地数据库（未同步）`
-  - `内存数据库（临时）`
+  - `云端同步（推荐）`
+  - `仅保存在本机`
+  - `临时模式（退出后清空）`
 - 提供同步诊断信息：账号状态、最近检查、日志
 - 监听本地/远端变更通知刷新界面
 
-### 7. 启动数据维护
+### 8. 启动数据维护
 
 App 启动后会执行一次维护任务：
 
 - 补齐 Memo 派生字段（如 `contentHash`）
 - 修复异常时间字段（`updatedAt < createdAt`）
-- 合并重复标签
 - 重算标签使用计数
 
 ## 技术栈
@@ -115,10 +121,10 @@ BB-Memo/
     ├── FlomoImportService.swift    # 导入服务（幂等）
     ├── FlomoImporter.swift         # flomo HTML 解析
     ├── TagExtractor.swift          # 标签提取与建议
-    ├── TagDeduplicator.swift       # 标签去重
     ├── TagUsageCounter.swift       # 标签计数维护
     ├── MemoFilter.swift            # 统一排序与过滤
-    ├── MemoTagRelationshipSync.swift # Memo/Tag 双向关系维护
+    ├── MemoMutationService.swift   # 统一写入入口（Memo/Tag）
+    ├── ImageOCRService.swift       # 图片文字提取
     └── NotificationManager.swift   # 提醒管理
 ```
 
@@ -152,7 +158,7 @@ cd BB-Memo
 
 ### flomo 导入
 
-- 在设置页选择“从 flomo 导入 (.html)”
+- 在设置页选择“导入 flomo 备份（HTML 文件）”
 - 仅支持 flomo 导出的 HTML 文件
 - 重复内容会按导入身份策略自动跳过
 

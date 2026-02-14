@@ -38,7 +38,7 @@ struct ReminderPickerView: View {
                     selectedDate = pickerDate
                     dismiss()
                 } label: {
-                    Text("确定")
+                    Text("保存提醒")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
