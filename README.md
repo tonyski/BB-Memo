@@ -1,6 +1,6 @@
 # BB Memo
 
-BB Memo 是一款面向 iPhone 和 iPad 的轻量笔记应用，强调快速记录、标签整理、时间线回顾与跨设备同步。
+BB Memo 是一款面向 iPhone 的轻量笔记应用，强调快速记录、标签整理、时间线回顾与跨设备同步。
 
 ## 功能概览
 
@@ -70,7 +70,7 @@ cd BB-Memo
 open BB-Memo.xcodeproj
 ```
 
-在 Xcode 中选择 iPhone / iPad 模拟器或真机运行即可。
+在 Xcode 中选择 iPhone 模拟器或真机运行即可。
 
 ## 同步与导入说明
 
