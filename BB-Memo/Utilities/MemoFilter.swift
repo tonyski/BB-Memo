@@ -9,7 +9,7 @@ import SwiftData
 /// 统一的 Memo 过滤 + 置顶排序逻辑
 enum MemoFilter {
 
-    static func sort(_ memos: [Memo]) -> [Memo] {
+    nonisolated static func sort(_ memos: [Memo]) -> [Memo] {
         memos.sorted { (lhs: Memo, rhs: Memo) in
             if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
             if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
@@ -17,7 +17,7 @@ enum MemoFilter {
         }
     }
 
-    static func sortRecycleBin(_ memos: [Memo]) -> [Memo] {
+    nonisolated static func sortRecycleBin(_ memos: [Memo]) -> [Memo] {
         memos.sorted { (lhs: Memo, rhs: Memo) in
             if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
             if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }
@@ -29,25 +29,34 @@ enum MemoFilter {
     static func apply(
         _ memos: [Memo],
         tag: Tag? = nil,
-        searchText: String = "",
-        includeDeleted: Bool = false
+        searchText: String = ""
     ) -> [Memo] {
         sort(
             memos.filter { memo in
-                if !includeDeleted && memo.isInRecycleBin { return false }
-                return matchesTag(memo, tag: tag) && matchesSearch(memo, searchText: searchText)
+                !memo.isInRecycleBin
+                    && matchesTag(memo, tag: tag)
+                    && matchesSearch(memo, searchText: searchText)
+            }
+        )
+    }
+
+    static func recycleBin(_ memos: [Memo], searchText: String = "") -> [Memo] {
+        sortRecycleBin(
+            memos.filter { memo in
+                memo.isInRecycleBin && matchesSearch(memo, searchText: searchText)
             }
         )
     }
 
     private static func matchesTag(_ memo: Memo, tag: Tag?) -> Bool {
         guard let tag else { return true }
-        return memo.tagsList.contains { $0.persistentModelID == tag.persistentModelID }
+        return (memo.tags ?? []).contains { $0.persistentModelID == tag.persistentModelID }
     }
 
     private static func matchesSearch(_ memo: Memo, searchText: String) -> Bool {
-        guard !searchText.isEmpty else { return true }
-        return memo.content.localizedCaseInsensitiveContains(searchText)
-            || memo.tagsList.contains { $0.name.localizedCaseInsensitiveContains(searchText) }
+        let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { return true }
+        return memo.content.localizedCaseInsensitiveContains(keyword)
+            || (memo.tags ?? []).contains { $0.name.localizedCaseInsensitiveContains(keyword) }
     }
 }

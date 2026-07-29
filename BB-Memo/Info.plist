@@ -22,9 +22,9 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
@@ -33,8 +33,12 @@
 	<string>用于从相册选择图片并提取文字到你的想法内容。</string>
 	<key>NSCameraUsageDescription</key>
 	<string>用于打开相机实时扫描图片中的文字并导入到你的想法内容。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于录制你的语音并实时转换为笔记文字。</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>用于将你的语音实时转换为笔记文字。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -48,10 +52,6 @@
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<string>armv7</string>
-	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

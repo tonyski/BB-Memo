@@ -26,9 +26,7 @@ struct ReminderPickerView: View {
                     in: Date.now...,
                     displayedComponents: [.date, .hourAndMinute]
                 )
-                #if os(iOS)
                 .datePickerStyle(.wheel)
-                #endif
                 .labelsHidden()
 
                 Spacer()
@@ -51,9 +49,7 @@ struct ReminderPickerView: View {
                 .padding(.bottom, 16)
             }
             .navigationTitle("设置提醒")
-            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
@@ -70,7 +66,7 @@ struct ReminderPickerView: View {
             }
             .onAppear {
                 if let existing = selectedDate {
-                    pickerDate = existing
+                    pickerDate = max(existing, .now.addingTimeInterval(60))
                 }
             }
         }

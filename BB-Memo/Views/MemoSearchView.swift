@@ -7,8 +7,6 @@
 
 import SwiftUI
 import SwiftData
-import CoreData
-import Combine
 
 /// 搜索页面 — 支持关键词搜索 + 时间筛选
 struct MemoSearchView: View {
@@ -20,7 +18,9 @@ struct MemoSearchView: View {
     @State private var debouncedSearchText = ""
     @State private var debounceTask: Task<Void, Never>?
     @State private var searchTask: Task<Void, Never>?
+    @State private var searchActor: MemoSearchActor?
     @State private var searchResults: [Memo] = []
+    @State private var searchErrorMessage: String?
     @State private var memoToEdit: Memo?
     @State private var selectedTimeFilter: MemoTimeFilter = .all
     @FocusState private var isFocused: Bool
@@ -92,13 +92,28 @@ struct MemoSearchView: View {
             // 结果
             if visibleSearchResults.isEmpty {
                 Spacer()
-                VStack(spacing: 12) {
-                    Image(systemName: searchText.isEmpty ? "magnifyingglass" : "doc.text.magnifyingglass")
-                        .font(.system(size: 40))
-                        .foregroundStyle(Color.secondary.opacity(0.3))
-                    Text(searchText.isEmpty ? "输入关键词开始搜索" : "没有找到相关笔记")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                if let searchErrorMessage {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 36))
+                            .foregroundStyle(AppTheme.warning)
+                        Text(searchErrorMessage)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Button("重试") {
+                            performSearch()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: searchText.isEmpty ? "magnifyingglass" : "doc.text.magnifyingglass")
+                            .font(.system(size: 40))
+                            .foregroundStyle(Color.secondary.opacity(0.3))
+                        Text(searchText.isEmpty ? "输入关键词开始搜索" : "没有找到相关笔记")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
             } else {
@@ -124,13 +139,14 @@ struct MemoSearchView: View {
         }
         .background(AppTheme.background.ignoresSafeArea())
         .navigationTitle("搜索")
-        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
-        #endif
         .sheet(item: $memoToEdit) { memo in
             MemoEditorSheetView(memo: memo)
         }
         .onAppear {
+            if searchActor == nil {
+                searchActor = MemoSearchActor(modelContainer: modelContext.container)
+            }
             isFocused = true
             debouncedSearchText = searchText
             performSearch()
@@ -141,10 +157,7 @@ struct MemoSearchView: View {
         .onChange(of: selectedTimeFilter) { _, _ in
             performSearch()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .memoDataChanged).receive(on: RunLoop.main)) { _ in
-            performSearch()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)) { _ in
+        .onReceive(AppNotifications.dataChanges) {
             performSearch()
         }
         .onChange(of: searchText) { _, newValue in
@@ -156,9 +169,7 @@ struct MemoSearchView: View {
             debounceTask = Task {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    debouncedSearchText = newValue
-                }
+                debouncedSearchText = newValue
             }
         }
         .onDisappear {
@@ -171,93 +182,91 @@ struct MemoSearchView: View {
         guard !trimmedKeyword.isEmpty else {
             searchTask?.cancel()
             searchResults = []
+            searchErrorMessage = nil
             return
         }
 
         searchTask?.cancel()
+        searchErrorMessage = nil
         let keyword = trimmedKeyword
         let startDate = selectedTimeFilter.startDate
-        let container = modelContext.container
+        let actor = searchActor ?? MemoSearchActor(modelContainer: modelContext.container)
+        searchActor = actor
 
-        searchTask = Task(priority: .userInitiated) {
+        searchTask = Task {
             do {
-                let context = ModelContext(container)
-                let contentMatches = try context.fetch(Self.makeContentDescriptor(keyword: keyword, startDate: startDate))
-                let tagDescriptor = FetchDescriptor<Tag>(
-                    predicate: #Predicate<Tag> { tag in
-                        tag.name.localizedStandardContains(keyword)
-                    }
+                let stableIDs = try await actor.search(
+                    keyword: keyword,
+                    startDate: startDate,
+                    limit: 120
                 )
-                let tags = try context.fetch(tagDescriptor)
-                let tagMatches = tags.flatMap(\.memosList).filter { memo in
-                    guard !memo.isInRecycleBin else { return false }
-                    guard let startDate else { return true }
-                    return memo.createdAt >= startDate
-                }
-                let merged = MemoFilter.sort(Self.merge(contentMatches, with: tagMatches))
-                let resultStableIDs = Array(merged.prefix(120)).map(\.stableID)
-
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    searchResults = fetchMemosByStableIDs(resultStableIDs)
-                }
+                searchResults = try fetchMemos(stableIDs: stableIDs)
             } catch {
                 guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    searchResults = []
-                }
+                searchResults = []
+                searchErrorMessage = "搜索失败，请重试。"
+                print("MemoSearchView search failed: \(error)")
             }
         }
     }
 
-    private static func makeContentDescriptor(keyword: String, startDate: Date?) -> FetchDescriptor<Memo> {
+    private func fetchMemos(stableIDs: [UUID]) throws -> [Memo] {
+        guard !stableIDs.isEmpty else { return [] }
+        let ids = stableIDs
+        let descriptor = FetchDescriptor<Memo>(
+            predicate: #Predicate<Memo> { ids.contains($0.stableID) }
+        )
+        let fetched = try modelContext.fetch(descriptor)
+        let byID = fetched.reduce(into: [UUID: Memo]()) { result, memo in
+            result[memo.stableID] = memo
+        }
+        return stableIDs.compactMap { byID[$0] }
+    }
+}
+
+@ModelActor
+private actor MemoSearchActor {
+    func search(keyword: String, startDate: Date?, limit: Int) throws -> [UUID] {
+        var contentDescriptor = makeContentDescriptor(keyword: keyword, startDate: startDate)
+        contentDescriptor.fetchLimit = limit
+        let contentMatches = try modelContext.fetch(contentDescriptor)
+        try Task.checkCancellation()
+
+        let tagDescriptor = FetchDescriptor<Tag>(
+            predicate: #Predicate<Tag> { $0.name.localizedStandardContains(keyword) }
+        )
+        let tags = try modelContext.fetch(tagDescriptor)
+        var byID = contentMatches.reduce(into: [UUID: Memo]()) { result, memo in
+            result[memo.stableID] = memo
+        }
+        for tag in tags {
+            try Task.checkCancellation()
+            for memo in tag.memosList where !memo.isInRecycleBin {
+                if let startDate, memo.createdAt < startDate { continue }
+                byID[memo.stableID] = memo
+            }
+        }
+        try Task.checkCancellation()
+        return MemoFilter.sort(Array(byID.values)).prefix(limit).map(\.stableID)
+    }
+
+    private func makeContentDescriptor(keyword: String, startDate: Date?) -> FetchDescriptor<Memo> {
         if let startDate {
             return FetchDescriptor<Memo>(
-                predicate: #Predicate<Memo> { memo in
-                    memo.createdAt >= startDate
-                    && memo.deletedAt == nil
-                    && memo.content.localizedStandardContains(keyword)
+                predicate: #Predicate<Memo> {
+                    $0.createdAt >= startDate
+                        && $0.deletedAt == nil
+                        && $0.content.localizedStandardContains(keyword)
                 },
                 sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
             )
         }
         return FetchDescriptor<Memo>(
-            predicate: #Predicate<Memo> { memo in
-                memo.deletedAt == nil
-                && memo.content.localizedStandardContains(keyword)
+            predicate: #Predicate<Memo> {
+                $0.deletedAt == nil && $0.content.localizedStandardContains(keyword)
             },
             sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
         )
-    }
-
-    private static func merge(_ lhs: [Memo], with rhs: [Memo]) -> [Memo] {
-        var merged: [UUID: Memo] = [:]
-        for memo in lhs {
-            merged[memo.stableID] = memo
-        }
-        for memo in rhs {
-            merged[memo.stableID] = memo
-        }
-        return Array(merged.values)
-    }
-
-    private func fetchMemosByStableIDs(_ stableIDs: [UUID]) -> [Memo] {
-        guard !stableIDs.isEmpty else { return [] }
-        let ids = stableIDs
-        let descriptor = FetchDescriptor<Memo>(
-            predicate: #Predicate<Memo> { memo in
-                ids.contains(memo.stableID)
-            }
-        )
-        let memos = ((try? modelContext.fetch(descriptor)) ?? []).filter { !$0.isInRecycleBin }
-        let byID = Dictionary(uniqueKeysWithValues: memos.map { ($0.stableID, $0) })
-        var ordered: [Memo] = []
-        ordered.reserveCapacity(stableIDs.count)
-        for id in stableIDs {
-            if let memo = byID[id] {
-                ordered.append(memo)
-            }
-        }
-        return ordered
     }
 }

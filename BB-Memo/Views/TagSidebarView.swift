@@ -7,8 +7,6 @@
 
 import SwiftUI
 import SwiftData
-import CoreData
-import Combine
 
 /// 左侧滑出标签筛选菜单
 struct TagSidebarView: View {
@@ -34,6 +32,14 @@ struct TagSidebarView: View {
         let keyword = tagSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !keyword.isEmpty else { return allTags }
         return allTags.filter { $0.name.localizedCaseInsensitiveContains(keyword) }
+    }
+
+    private var tagListHeight: CGFloat {
+        min(max(CGFloat(filteredTags.count) * 38, 44), 380)
+    }
+
+    private var hasTagOverflow: Bool {
+        filteredTags.count > 10
     }
     
     var body: some View {
@@ -87,10 +93,7 @@ struct TagSidebarView: View {
                 collapseTagSearch()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .memoDataChanged).receive(on: RunLoop.main)) { _ in
-            refreshMemoCounts()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)) { _ in
+        .onReceive(AppNotifications.dataChanges) {
             refreshMemoCounts()
         }
         .confirmationDialog(
@@ -209,7 +212,14 @@ struct TagSidebarView: View {
                     }
                 }
                 .scrollIndicators(.hidden)
-                .frame(maxHeight: .infinity, alignment: .top)
+                .frame(height: tagListHeight, alignment: .top)
+                .mask {
+                    if hasTagOverflow {
+                        TagOverflowMask()
+                    } else {
+                        Rectangle()
+                    }
+                }
                 .simultaneousGesture(
                     TapGesture().onEnded {
                         if isTagSearchExpanded {
@@ -319,7 +329,6 @@ struct TagSidebarView: View {
             print("TagSidebarView deleteTag save failed: \(error)")
         }
         HapticFeedback.medium.play()
-        refreshMemoCounts()
         tagPendingDeletion = nil
     }
 
@@ -353,6 +362,21 @@ struct TagSidebarView: View {
         .padding(.horizontal, 20)
         .padding(.top, topInset + 24)
         .padding(.bottom, 10)
+    }
+}
+
+struct TagOverflowMask: View {
+    var body: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black, location: 0.86),
+                .init(color: .black.opacity(0.55), location: 0.94),
+                .init(color: .clear, location: 1)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 }
 

@@ -25,6 +25,7 @@ struct MemoEditorView: View {
     @State private var activeSheet: ActiveSheet?
     @State private var showSaveErrorAlert = false
     @State private var saveErrorMessage = ""
+    @State private var isSaving = false
     @State private var showReminderIssueAlert = false
     @State private var reminderIssueMessage = ""
     @State private var selectedPhotoItem: PhotosPickerItem?
@@ -33,6 +34,9 @@ struct MemoEditorView: View {
     @State private var isRecognizingImageText = false
     @State private var showOCRErrorAlert = false
     @State private var ocrErrorMessage = ""
+    @State private var speechService = SpeechTranscriptionService()
+    @State private var speechBaseContent = ""
+    @State private var speechTask: Task<Void, Never>?
 
     @FocusState private var isFocused: Bool
 
@@ -45,17 +49,6 @@ struct MemoEditorView: View {
 
     private var trimmedContent: String {
         content.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    private var reminderButtonTitle: String {
-        let value = reminderDate?.formatted(
-            .dateTime
-                .month()
-                .day()
-                .hour()
-                .minute()
-                .locale(.autoupdatingCurrent)
-        ) ?? "未设置"
-        return "设置提醒 · \(value)"
     }
     private var reminderCompactButtonTitle: String {
         reminderDate?.formatted(
@@ -88,12 +81,9 @@ struct MemoEditorView: View {
     }
     private var frequentTagSuggestions: [TagSuggestion] {
         allTags
-            .sorted { lhs, rhs in
-                if lhs.usageCount != rhs.usageCount { return lhs.usageCount > rhs.usageCount }
-                return lhs.name.localizedCompare(rhs.name) == .orderedAscending
-            }
+            .sorted(by: Tag.usageOrder)
             .prefix(3)
-            .map { TagSuggestion(name: $0.name, isAutoAdded: false) }
+            .map { TagSuggestion(name: $0.name) }
     }
 
     private var mergedTagSuggestions: [TagSuggestion] {
@@ -102,15 +92,15 @@ struct MemoEditorView: View {
 
         for name in selectedTagNames.sorted() {
             let normalized = Tag.normalize(name)
-            let key = normalized.lowercased()
+            let key = Tag.normalizedKey(for: normalized)
             guard !key.isEmpty else { continue }
             if seen.insert(key).inserted {
-                result.append(TagSuggestion(name: normalized, isAutoAdded: false))
+                result.append(TagSuggestion(name: normalized))
             }
         }
 
         for suggestion in frequentTagSuggestions {
-            let key = Tag.normalize(suggestion.name).lowercased()
+            let key = Tag.normalizedKey(for: suggestion.name)
             guard !key.isEmpty else { continue }
             if seen.insert(key).inserted {
                 result.append(suggestion)
@@ -118,7 +108,7 @@ struct MemoEditorView: View {
         }
 
         for suggestion in aiSuggestions {
-            let key = Tag.normalize(suggestion.name).lowercased()
+            let key = Tag.normalizedKey(for: suggestion.name)
             guard !key.isEmpty else { continue }
             if seen.insert(key).inserted {
                 result.append(suggestion)
@@ -137,13 +127,25 @@ struct MemoEditorView: View {
                         .lineSpacing(6)
                         .scrollContentBackground(.hidden)
                         .focused($isFocused)
+                        .allowsHitTesting(!speechService.isActive)
                         .task(id: content) {
                             try? await Task.sleep(for: .milliseconds(500))
                             guard !Task.isCancelled else { return }
-                            aiSuggestions = TagExtractor.suggestTags(
-                                from: content,
-                                existingTagNames: allTags.map(\.name)
-                            )
+                            let text = content
+                            let existingTagNames = allTags.map(\.name)
+                            let analysis = Task.detached(priority: .utility) {
+                                TagExtractor.suggestTags(
+                                    from: text,
+                                    existingTagNames: existingTagNames
+                                )
+                            }
+                            let suggestions = await withTaskCancellationHandler {
+                                await analysis.value
+                            } onCancel: {
+                                analysis.cancel()
+                            }
+                            guard !Task.isCancelled else { return }
+                            aiSuggestions = suggestions
                         }
 
                     if content.isEmpty {
@@ -164,21 +166,30 @@ struct MemoEditorView: View {
                 bottomAccessoryArea
             }
             .navigationTitle(memo == nil ? "新建笔记" : "编辑笔记")
-            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
+                    Button("取消") {
+                        cancelSpeechInput()
+                        dismiss()
+                    }
                         .foregroundStyle(.secondary)
+                        .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") {
+                    Button {
                         Task { await save() }
+                    } label: {
+                        if isSaving {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text("完成")
+                        }
                     }
                         .font(.system(size: 15, weight: .semibold, design: AppTheme.Layout.fontDesign))
                         .foregroundStyle(trimmedContent.isEmpty ? .secondary : AppTheme.brandAccent)
-                        .disabled(trimmedContent.isEmpty)
+                        .disabled(trimmedContent.isEmpty || isSaving)
                 }
             }
             .sheet(item: $activeSheet) { sheet in
@@ -196,23 +207,11 @@ struct MemoEditorView: View {
                             addCustomTag(named: name)
                         }
                     )
-                    #if os(iOS)
                     .presentationDetents([.height(360)])
-                    #endif
                 case .cameraScanner:
-                    #if os(iOS)
-                    if #available(iOS 16.0, *) {
-                        CameraTextScannerSheet(onRecognizedText: { text in
-                            appendRecognizedText(text)
-                        })
-                    } else {
-                        Text("当前系统版本不支持相机实时扫描，请改用“从相册提取”。")
-                            .padding()
-                    }
-                    #else
-                    Text("当前平台不支持相机实时扫描，请改用“从相册提取”。")
-                        .padding()
-                    #endif
+                    CameraTextScannerSheet(onRecognizedText: { text in
+                        appendRecognizedText(text)
+                    })
                 }
             }
             .photosPicker(
@@ -238,8 +237,19 @@ struct MemoEditorView: View {
             } message: {
                 Text(ocrErrorMessage)
             }
+            .alert("语音录入不可用", isPresented: Binding(
+                get: { speechService.errorMessage != nil },
+                set: { if !$0 { speechService.dismissError() } }
+            )) {
+                Button("确定", role: .cancel) {}
+            } message: {
+                Text(speechService.errorMessage ?? "无法开始语音录入，请稍后重试。")
+            }
             .onAppear {
                 isFocused = true
+            }
+            .onDisappear {
+                cancelSpeechInput()
             }
             .onChange(of: activeSheet) { _, newValue in
                 if newValue == nil {
@@ -252,6 +262,10 @@ struct MemoEditorView: View {
                     await recognizeText(from: item)
                 }
             }
+            .onChange(of: speechService.transcript) { _, transcript in
+                updateSpeechTranscript(transcript)
+            }
+            .interactiveDismissDisabled(isSaving || speechService.isActive)
         }
     }
 
@@ -269,22 +283,17 @@ struct MemoEditorView: View {
             .animation(nil, value: selectedTagNames)
             .animation(nil, value: mergedTagSuggestions.map(\.id))
 
-            if memo == nil {
-                HStack(spacing: 10) {
-                    reminderButton(isCompact: true)
-                        .frame(maxWidth: .infinity)
-                    imageOCRButton
-                        .frame(maxWidth: .infinity)
-                }
-                    .padding(.horizontal, AppTheme.Layout.screenPadding)
-                    .padding(.top, 10)
-                    .padding(.bottom, 10)
-            } else {
-                reminderButton(isCompact: false)
-                    .padding(.horizontal, AppTheme.Layout.screenPadding)
-                    .padding(.top, 10)
-                    .padding(.bottom, 10)
+            HStack(spacing: 10) {
+                imageOCRButton
+                    .frame(maxWidth: .infinity)
+                speechInputButton
+                    .frame(maxWidth: .infinity)
+                reminderButton
+                    .frame(maxWidth: .infinity)
             }
+            .padding(.horizontal, AppTheme.Layout.screenPadding)
+            .padding(.top, 10)
+            .padding(.bottom, 10)
         }
         .background(AppTheme.cardBackground)
     }
@@ -293,9 +302,14 @@ struct MemoEditorView: View {
 
     @MainActor
     private func save() async {
+        guard !isSaving else { return }
+        isSaving = true
+        defer { isSaving = false }
+        await finishSpeechInput()
         guard !trimmedContent.isEmpty else { return }
         
         HapticFeedback.medium.play()
+        let previousReminderDate = memo?.reminderDate
         let targetMemo: Memo
 
         do {
@@ -313,8 +327,6 @@ struct MemoEditorView: View {
         }
         let memoID = targetMemo.reminderIdentifier
 
-        // 通知管理
-        NotificationManager.cancelReminder(memoID: memoID)
         if let date = reminderDate {
             let scheduleResult = await NotificationManager.scheduleReminder(
                 memoID: memoID,
@@ -325,17 +337,30 @@ struct MemoEditorView: View {
             case .scheduled:
                 break
             case .permissionDenied:
+                restoreReminderDate(previousReminderDate, for: targetMemo)
                 reminderIssueMessage = "内容已保存，但系统通知权限未开启。请到系统设置中允许通知后再设置提醒。"
                 showReminderIssueAlert = true
             case .failed:
+                restoreReminderDate(previousReminderDate, for: targetMemo)
                 reminderIssueMessage = "内容已保存，但提醒创建失败，请稍后再试。"
                 showReminderIssueAlert = true
             }
+        } else {
+            NotificationManager.cancelReminder(memoID: memoID)
         }
 
         AppNotifications.postMemoDataChanged()
         if !showReminderIssueAlert {
             dismiss()
+        }
+    }
+
+    private func restoreReminderDate(_ date: Date?, for memo: Memo) {
+        reminderDate = date
+        do {
+            try MemoMutationService.updateReminderDate(date, for: memo, context: modelContext)
+        } catch {
+            print("MemoEditorView reminder rollback failed: \(error)")
         }
     }
 
@@ -358,11 +383,8 @@ struct MemoEditorView: View {
     private func canonicalTagName(for raw: String) -> String {
         let normalized = Tag.normalize(raw)
         guard !normalized.isEmpty else { return "" }
-        let key = normalized.lowercased()
-        return allTags.first {
-            let existingKey = $0.normalizedName.isEmpty ? Tag.normalize($0.name).lowercased() : $0.normalizedName
-            return existingKey == key
-        }?.name ?? normalized
+        let key = Tag.normalizedKey(for: normalized)
+        return allTags.first { $0.normalizedKey == key }?.name ?? normalized
     }
 
     private var imageOCRButton: some View {
@@ -370,36 +392,39 @@ struct MemoEditorView: View {
             guard !isRecognizingImageText else { return }
             showImageSourceDialog = true
         } label: {
-            accessoryActionStyle {
-                Group {
-                    if isRecognizingImageText {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(AppTheme.brandAccent)
-                    } else {
-                        Image(systemName: "text.viewfinder")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(AppTheme.brandAccent)
-                    }
-                }
-                Text(isRecognizingImageText ? "正在提取文字..." : "提取图片文字")
-                    .font(.system(size: 14, weight: .regular, design: AppTheme.Layout.fontDesign))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+            compactAccessoryActionStyle {
+                imageOCRLabelContent(title: isRecognizingImageText ? "提取中" : "图片")
             }
         }
         .buttonStyle(.plain)
-        .disabled(isRecognizingImageText)
+        .disabled(isRecognizingImageText || speechService.isActive)
         .popover(
             isPresented: $showImageSourceDialog,
             attachmentAnchor: .point(.top),
             arrowEdge: .bottom
         ) {
             imageSourcePopoverContent
-                #if os(iOS)
                 .presentationCompactAdaptation(.popover)
-                #endif
         }
+    }
+
+    @ViewBuilder
+    private func imageOCRLabelContent(title: String) -> some View {
+        Group {
+            if isRecognizingImageText {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(AppTheme.brandAccent)
+            } else {
+                Image(systemName: "text.viewfinder")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(AppTheme.brandAccent)
+            }
+        }
+        Text(title)
+            .font(.system(size: 14, weight: .regular, design: AppTheme.Layout.fontDesign))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
     }
 
     @ViewBuilder
@@ -410,12 +435,10 @@ struct MemoEditorView: View {
                 showPhotoPicker = true
             }
 
-            #if os(iOS)
             imageSourceButton("相机实时扫描", systemImage: "camera.viewfinder") {
                 showImageSourceDialog = false
                 activeSheet = .cameraScanner
             }
-            #endif
         }
         .padding(12)
         .frame(minWidth: 200)
@@ -491,35 +514,123 @@ struct MemoEditorView: View {
         HapticFeedback.light.play()
     }
 
-    private func reminderButton(isCompact: Bool) -> some View {
+    private var reminderButton: some View {
         Button {
             activeSheet = .reminder
             HapticFeedback.light.play()
         } label: {
-            accessoryActionStyle {
-                Image(systemName: reminderIconName)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(reminderIconColor)
-                Text(isCompact ? reminderCompactButtonTitle : reminderButtonTitle)
-                    .font(.system(size: 14, weight: .regular, design: AppTheme.Layout.fontDesign))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+            compactAccessoryActionStyle {
+                reminderLabelContent(title: reminderDate == nil ? "提醒" : reminderCompactButtonTitle)
             }
         }
         .buttonStyle(.plain)
+        .disabled(speechService.isActive)
     }
 
-    private func accessoryActionStyle<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        HStack(spacing: 10) {
-            content()
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    @ViewBuilder
+    private func reminderLabelContent(title: String) -> some View {
+        Image(systemName: reminderIconName)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(reminderIconColor)
+        Text(title)
+            .font(.system(size: 14, weight: .regular, design: AppTheme.Layout.fontDesign))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
     }
+
+    private var speechInputButton: some View {
+        Button {
+            handleSpeechButtonTap()
+        } label: {
+            compactAccessoryActionStyle(
+                accentColor: speechService.isActive ? .red : AppTheme.brandAccent
+            ) {
+                Group {
+                    if speechService.state.showsProgress {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.red)
+                    } else {
+                        Image(systemName: speechService.isRecording ? "stop.fill" : "mic.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                }
+                Text(speechService.state.buttonTitle)
+                    .font(.system(size: 14, weight: .regular, design: AppTheme.Layout.fontDesign))
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isRecognizingImageText || speechService.state == .finishing)
+        .accessibilityLabel(speechService.isActive ? "停止语音录入" : "开始语音录入")
+    }
+
+    private func handleSpeechButtonTap() {
+        switch speechService.state {
+        case .idle:
+            beginSpeechInput()
+        case .authorizing:
+            cancelSpeechInput()
+        case .recording:
+            speechTask = Task {
+                await speechService.finish()
+                HapticFeedback.light.play()
+            }
+        case .finishing:
+            break
+        }
+    }
+
+    private func beginSpeechInput() {
+        speechBaseContent = content
+        speechTask?.cancel()
+        speechTask = Task {
+            await speechService.start()
+            if speechService.isRecording {
+                HapticFeedback.medium.play()
+            }
+        }
+    }
+
+    @MainActor
+    private func updateSpeechTranscript(_ transcript: String) {
+        let normalized = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+        let base = speechBaseContent
+        if base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            content = normalized
+        } else {
+            let separator = base.hasSuffix("\n") ? "" : "\n\n"
+            content = base + separator + normalized
+        }
+    }
+
+    @MainActor
+    private func finishSpeechInput() async {
+        speechTask?.cancel()
+        speechTask = nil
+        await speechService.finish()
+    }
+
+    private func cancelSpeechInput() {
+        speechTask?.cancel()
+        speechTask = nil
+        speechService.cancel()
+    }
+
+    private func compactAccessoryActionStyle<Content: View>(
+        accentColor: Color = AppTheme.brandAccent,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 7) {
+            content()
+        }
+        .foregroundStyle(accentColor)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 11)
+        .background(accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
 }

@@ -7,8 +7,6 @@
 
 import SwiftUI
 import SwiftData
-import CoreData
-import Combine
 
 /// BB 主页 — 时间线 + 标签侧栏
 struct MemoTimelineView: View {
@@ -17,20 +15,9 @@ struct MemoTimelineView: View {
 
     private struct PagingState {
         var tagLoadedCount = 0
-        var pinnedLoadedCount = 0
-        var unpinnedLoadedCount = 0
-        var pinnedExhausted = false
+        var cursor = MemoPageCursor()
         var canLoadMore = true
         var isLoadingPage = false
-
-        mutating func reset() {
-            tagLoadedCount = 0
-            pinnedLoadedCount = 0
-            unpinnedLoadedCount = 0
-            pinnedExhausted = false
-            canLoadMore = true
-            isLoadingPage = false
-        }
     }
 
     @State private var memoToEdit: Memo?
@@ -42,13 +29,10 @@ struct MemoTimelineView: View {
     @State private var paging = PagingState()
     @State private var totalMemoCount = 0
     @State private var reloadTask: Task<Void, Never>?
-    @State private var loadPageTask: Task<Void, Never>?
+    @State private var loadErrorMessage: String?
 
     private let pageSize = 40
     private let topBarFadeAnimation = Animation.easeOut(duration: 0.12)
-    private var visibleDisplayedMemos: [Memo] {
-        displayedMemos.filter { isRecycleBinSelected ? $0.isInRecycleBin : !$0.isInRecycleBin }
-    }
 
     var body: some View {
         ZStack {
@@ -68,9 +52,7 @@ struct MemoTimelineView: View {
         .overlay(alignment: .leading) {
             edgeOpenSidebarHotZone
         }
-        #if os(iOS)
         .navigationBarHidden(true)
-        #endif
         .sheet(item: $memoToEdit) { memo in
             MemoEditorSheetView(memo: memo)
         }
@@ -88,10 +70,7 @@ struct MemoTimelineView: View {
         .onChange(of: isRecycleBinSelected) { _, _ in
             resetAndReload()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .memoDataChanged).receive(on: RunLoop.main)) { _ in
-            scheduleReload()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange).receive(on: RunLoop.main)) { _ in
+        .onReceive(AppNotifications.dataChanges) {
             scheduleReload()
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -101,7 +80,6 @@ struct MemoTimelineView: View {
         }
         .onDisappear {
             reloadTask?.cancel()
-            loadPageTask?.cancel()
         }
     }
 
@@ -191,10 +169,14 @@ struct MemoTimelineView: View {
     private var memoList: some View {
         ScrollView {
             LazyVStack(spacing: AppTheme.Layout.cardSpacing) {
-                if visibleDisplayedMemos.isEmpty && !paging.isLoadingPage {
-                    emptyState
+                if displayedMemos.isEmpty && !paging.isLoadingPage {
+                    if loadErrorMessage != nil {
+                        loadErrorState
+                    } else {
+                        emptyState
+                    }
                 } else {
-                    ForEach(visibleDisplayedMemos, id: \.persistentModelID) { memo in
+                    ForEach(displayedMemos, id: \.persistentModelID) { memo in
                         MemoCardView(
                             memo: memo,
                             mode: isRecycleBinSelected ? .recycleBin : .normal,
@@ -220,6 +202,11 @@ struct MemoTimelineView: View {
                             loadNextPageIfNeeded(current: memo)
                         }
                     }
+                }
+
+                if !displayedMemos.isEmpty, loadErrorMessage != nil {
+                    loadErrorState
+                        .padding(.top, 12)
                 }
 
                 // 底部间距
@@ -281,294 +268,149 @@ struct MemoTimelineView: View {
         .padding(.top, 140)
     }
 
+    private var loadErrorState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 32, weight: .light))
+                .foregroundStyle(AppTheme.warning)
+            Text(loadErrorMessage ?? "读取笔记失败")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button("重试") {
+                resetAndReload()
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, displayedMemos.isEmpty ? 120 : 20)
+    }
+
     // MARK: - Paging
 
     private func resetAndReload() {
         reloadTask?.cancel()
-        loadPageTask?.cancel()
+        loadErrorMessage = nil
         if isRecycleBinSelected {
             loadRecycleBin()
             return
         }
-        displayedMemos = []
-        selectedTagSortedMemos = selectedTag.map { MemoFilter.sort($0.memosList.filter { !$0.isInRecycleBin }) } ?? []
-        paging.reset()
-        refreshTotalCount()
-        loadNextPage()
+
+        if let selectedTag {
+            selectedTagSortedMemos = MemoFilter.apply(selectedTag.memosList)
+            totalMemoCount = selectedTagSortedMemos.count
+            let firstPage = Array(selectedTagSortedMemos.prefix(pageSize))
+            displayedMemos = firstPage
+            paging = PagingState(
+                tagLoadedCount: firstPage.count,
+                canLoadMore: firstPage.count < selectedTagSortedMemos.count
+            )
+            return
+        }
+
+        selectedTagSortedMemos = []
+        do {
+            totalMemoCount = try MemoQueryService.activeCount(in: modelContext)
+            var freshPaging = PagingState()
+            displayedMemos = try MemoQueryService.fetchActivePage(
+                in: modelContext,
+                cursor: &freshPaging.cursor,
+                limit: pageSize
+            )
+            freshPaging.canLoadMore = displayedMemos.count < totalMemoCount
+            paging = freshPaging
+        } catch {
+            handleLoadError(error)
+        }
     }
 
     private func loadNextPageIfNeeded(current memo: Memo) {
-        guard !isRecycleBinSelected else { return }
         guard paging.canLoadMore, !paging.isLoadingPage else { return }
-        let visible = visibleDisplayedMemos
-        let triggerIndex = max(visible.count - 8, 0)
-        guard visible.indices.contains(triggerIndex) else { return }
-        let triggerMemoID = visible[triggerIndex].persistentModelID
+        let triggerIndex = max(displayedMemos.count - 8, 0)
+        guard displayedMemos.indices.contains(triggerIndex) else { return }
+        let triggerMemoID = displayedMemos[triggerIndex].persistentModelID
         if memo.persistentModelID == triggerMemoID {
             loadNextPage()
         }
     }
 
     private func loadNextPage() {
-        guard !isRecycleBinSelected else { return }
         guard paging.canLoadMore, !paging.isLoadingPage else { return }
-        paging.isLoadingPage = true
+        if isRecycleBinSelected {
+            paging.isLoadingPage = true
+            defer { paging.isLoadingPage = false }
+            do {
+                let page = try MemoQueryService.fetchRecycleBinPage(
+                    in: modelContext,
+                    cursor: &paging.cursor,
+                    limit: pageSize
+                )
+                displayedMemos.append(contentsOf: page)
+                paging.canLoadMore = paging.cursor.recycleBinOffset < totalMemoCount
+                loadErrorMessage = nil
+            } catch {
+                handleLoadError(error)
+            }
+            return
+        }
 
         if selectedTag != nil {
             let page = Array(selectedTagSortedMemos.dropFirst(paging.tagLoadedCount).prefix(pageSize))
             displayedMemos.append(contentsOf: page)
             paging.tagLoadedCount += page.count
-            paging.canLoadMore = page.count == pageSize && paging.tagLoadedCount < selectedTagSortedMemos.count
-            paging.isLoadingPage = false
+            paging.canLoadMore = paging.tagLoadedCount < selectedTagSortedMemos.count
             return
         }
 
-        struct PageSlice: Sendable {
-            let stableIDs: [UUID]
-            let pinnedCount: Int
-            let unpinnedCount: Int
-            let pinnedExhausted: Bool
-        }
-
-        let pageSize = self.pageSize
-        let container = modelContext.container
-        let pinnedLoadedCount = paging.pinnedLoadedCount
-        let unpinnedLoadedCount = paging.unpinnedLoadedCount
-        let pinnedExhausted = paging.pinnedExhausted
-        let currentTotalCount = totalMemoCount
-
-        loadPageTask?.cancel()
-        loadPageTask = Task(priority: .userInitiated) {
-            do {
-                let context = ModelContext(container)
-                var page: [Memo] = []
-                var remaining = pageSize
-                var loadedPinnedCount = 0
-                var loadedUnpinnedCount = 0
-                var didExhaustPinned = pinnedExhausted
-
-                if !didExhaustPinned {
-                    var pinnedDescriptor = FetchDescriptor<Memo>(
-                        predicate: #Predicate<Memo> { $0.isPinned == true && $0.deletedAt == nil },
-                        sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
-                    )
-                    pinnedDescriptor.fetchOffset = pinnedLoadedCount
-                    pinnedDescriptor.fetchLimit = remaining
-
-                    let pinnedPage = try context.fetch(pinnedDescriptor)
-                    page.append(contentsOf: pinnedPage)
-                    loadedPinnedCount = pinnedPage.count
-                    remaining -= pinnedPage.count
-                    if pinnedPage.count < pageSize {
-                        didExhaustPinned = true
-                    }
-                }
-
-                if remaining > 0 {
-                    var unpinnedDescriptor = FetchDescriptor<Memo>(
-                        predicate: #Predicate<Memo> { $0.isPinned == false && $0.deletedAt == nil },
-                        sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
-                    )
-                    unpinnedDescriptor.fetchOffset = unpinnedLoadedCount
-                    unpinnedDescriptor.fetchLimit = remaining
-
-                    let unpinnedPage = try context.fetch(unpinnedDescriptor)
-                    page.append(contentsOf: unpinnedPage)
-                    loadedUnpinnedCount = unpinnedPage.count
-                }
-
-                let pageSlice = PageSlice(
-                    stableIDs: page.map(\.stableID),
-                    pinnedCount: loadedPinnedCount,
-                    unpinnedCount: loadedUnpinnedCount,
-                    pinnedExhausted: didExhaustPinned
-                )
-
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    let page = fetchMemosByStableIDs(pageSlice.stableIDs)
-                    displayedMemos.append(contentsOf: page)
-                    paging.pinnedLoadedCount += pageSlice.pinnedCount
-                    paging.unpinnedLoadedCount += pageSlice.unpinnedCount
-                    paging.pinnedExhausted = pageSlice.pinnedExhausted
-                    paging.canLoadMore = displayedMemos.count < currentTotalCount
-                    paging.isLoadingPage = false
-                }
-            } catch {
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    paging.canLoadMore = false
-                    paging.isLoadingPage = false
-                }
-            }
-        }
-    }
-
-    private func refreshTotalCount() {
-        if isRecycleBinSelected {
-            do {
-                let descriptor = FetchDescriptor<Memo>(
-                    predicate: #Predicate<Memo> { $0.deletedAt != nil }
-                )
-                totalMemoCount = try modelContext.fetchCount(descriptor)
-            } catch {
-                totalMemoCount = displayedMemos.count
-            }
-            return
-        }
-        guard selectedTag == nil else {
-            totalMemoCount = 0
-            return
-        }
+        paging.isLoadingPage = true
+        defer { paging.isLoadingPage = false }
         do {
-            let descriptor = FetchDescriptor<Memo>(
-                predicate: #Predicate<Memo> { $0.deletedAt == nil }
+            let page = try MemoQueryService.fetchActivePage(
+                in: modelContext,
+                cursor: &paging.cursor,
+                limit: pageSize
             )
-            totalMemoCount = try modelContext.fetchCount(descriptor)
+            displayedMemos.append(contentsOf: page)
+            paging.canLoadMore = paging.cursor.activeLoadedCount < totalMemoCount
+            loadErrorMessage = nil
         } catch {
-            totalMemoCount = displayedMemos.count
+            handleLoadError(error)
         }
     }
 
-    private func scheduleReload(delay: Duration = .milliseconds(280)) {
+    private func scheduleReload(delay: Duration = .milliseconds(120)) {
         reloadTask?.cancel()
         reloadTask = Task {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                if displayedMemos.isEmpty {
-                    resetAndReload()
-                } else {
-                    refreshSilently()
-                }
-            }
+            resetAndReload()
         }
-    }
-
-    /// 刷新已有列表时静默更新，避免先清空数据触发 loading 闪烁
-    private func refreshSilently() {
-        loadPageTask?.cancel()
-
-        if isRecycleBinSelected {
-            loadRecycleBin()
-            return
-        }
-
-        if selectedTag != nil {
-            let sorted = selectedTag.map { MemoFilter.sort($0.memosList.filter { !$0.isInRecycleBin }) } ?? []
-            let firstPage = Array(sorted.prefix(pageSize))
-            selectedTagSortedMemos = sorted
-            displayedMemos = firstPage
-            paging.reset()
-            paging.tagLoadedCount = firstPage.count
-            paging.canLoadMore = firstPage.count == pageSize && firstPage.count < sorted.count
-            refreshTotalCount()
-            return
-        }
-
-        struct FirstPageSnapshot: Sendable {
-            let stableIDs: [UUID]
-            let pinnedCount: Int
-            let unpinnedCount: Int
-            let pinnedExhausted: Bool
-        }
-
-        let container = modelContext.container
-        let pageSize = self.pageSize
-
-        loadPageTask = Task(priority: .userInitiated) {
-            do {
-                let context = ModelContext(container)
-                var page: [Memo] = []
-                var remaining = pageSize
-                var loadedPinnedCount = 0
-                var loadedUnpinnedCount = 0
-                var didExhaustPinned = false
-
-                var pinnedDescriptor = FetchDescriptor<Memo>(
-                    predicate: #Predicate<Memo> { $0.isPinned == true && $0.deletedAt == nil },
-                    sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
-                )
-                pinnedDescriptor.fetchOffset = 0
-                pinnedDescriptor.fetchLimit = remaining
-                let pinnedPage = try context.fetch(pinnedDescriptor)
-                page.append(contentsOf: pinnedPage)
-                loadedPinnedCount = pinnedPage.count
-                remaining -= pinnedPage.count
-                if pinnedPage.count < pageSize {
-                    didExhaustPinned = true
-                }
-
-                if remaining > 0 {
-                    var unpinnedDescriptor = FetchDescriptor<Memo>(
-                        predicate: #Predicate<Memo> { $0.isPinned == false && $0.deletedAt == nil },
-                        sortBy: [SortDescriptor(\Memo.createdAt, order: .reverse)]
-                    )
-                    unpinnedDescriptor.fetchOffset = 0
-                    unpinnedDescriptor.fetchLimit = remaining
-                    let unpinnedPage = try context.fetch(unpinnedDescriptor)
-                    page.append(contentsOf: unpinnedPage)
-                    loadedUnpinnedCount = unpinnedPage.count
-                }
-
-                let snapshot = FirstPageSnapshot(
-                    stableIDs: page.map(\.stableID),
-                    pinnedCount: loadedPinnedCount,
-                    unpinnedCount: loadedUnpinnedCount,
-                    pinnedExhausted: didExhaustPinned
-                )
-
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    let firstPage = fetchMemosByStableIDs(snapshot.stableIDs)
-                    displayedMemos = firstPage
-                    paging.reset()
-                    paging.pinnedLoadedCount = snapshot.pinnedCount
-                    paging.unpinnedLoadedCount = snapshot.unpinnedCount
-                    paging.pinnedExhausted = snapshot.pinnedExhausted
-                    refreshTotalCount()
-                    paging.canLoadMore = displayedMemos.count < totalMemoCount
-                }
-            } catch {
-                // 静默刷新失败时保留当前列表，避免界面抖动
-            }
-        }
-    }
-
-    private func fetchMemosByStableIDs(_ stableIDs: [UUID]) -> [Memo] {
-        guard !stableIDs.isEmpty else { return [] }
-        let ids = stableIDs
-        let descriptor = FetchDescriptor<Memo>(
-            predicate: #Predicate<Memo> { memo in
-                ids.contains(memo.stableID)
-            }
-        )
-        let memos = (try? modelContext.fetch(descriptor)) ?? []
-        let byID = Dictionary(uniqueKeysWithValues: memos.map { ($0.stableID, $0) })
-        var ordered: [Memo] = []
-        ordered.reserveCapacity(stableIDs.count)
-        for id in stableIDs {
-            if let memo = byID[id] {
-                ordered.append(memo)
-            }
-        }
-        return ordered
     }
 
     private func loadRecycleBin() {
-        let descriptor = FetchDescriptor<Memo>(
-            predicate: #Predicate<Memo> { $0.deletedAt != nil },
-            sortBy: [SortDescriptor(\Memo.updatedAt, order: .reverse)]
-        )
-        let recycled = (try? modelContext.fetch(descriptor)) ?? []
-        withAnimation(AppTheme.snappy) {
-            displayedMemos = MemoFilter.sortRecycleBin(recycled)
+        do {
+            totalMemoCount = try MemoQueryService.recycleBinCount(in: modelContext)
+            var freshPaging = PagingState()
+            let firstPage = try MemoQueryService.fetchRecycleBinPage(
+                in: modelContext,
+                cursor: &freshPaging.cursor,
+                limit: pageSize
+            )
+            freshPaging.canLoadMore =
+                freshPaging.cursor.recycleBinOffset < totalMemoCount
+            withAnimation(AppTheme.snappy) {
+                displayedMemos = firstPage
+            }
+            selectedTagSortedMemos = []
+            paging = freshPaging
+            loadErrorMessage = nil
+        } catch {
+            handleLoadError(error)
         }
-        selectedTagSortedMemos = []
-        paging.reset()
-        paging.canLoadMore = false
-        paging.isLoadingPage = false
-        totalMemoCount = displayedMemos.count
+    }
+
+    private func handleLoadError(_ error: Error) {
+        loadErrorMessage = "读取笔记失败，请重试。"
+        print("MemoTimelineView fetch failed: \(error)")
     }
 
     private func removeMemoFromDisplayedList(stableID: UUID) {

@@ -28,17 +28,26 @@ final class Tag: Identifiable {
         self.memos = memos
     }
 
-    static func normalize(_ raw: String) -> String {
+    nonisolated static func normalize(_ raw: String) -> String {
         raw.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
     }
 
-    var stableSortKey: String {
-        normalizedName.isEmpty ? Tag.normalize(name).lowercased() : normalizedName
+    nonisolated static func normalizedKey(for raw: String) -> String {
+        normalize(raw).lowercased()
+    }
+
+    var normalizedKey: String {
+        normalizedName.isEmpty ? Tag.normalizedKey(for: name) : normalizedName
     }
 
     static func stableDisplayOrder(_ lhs: Tag, _ rhs: Tag) -> Bool {
-        if lhs.stableSortKey != rhs.stableSortKey { return lhs.stableSortKey < rhs.stableSortKey }
+        if lhs.normalizedKey != rhs.normalizedKey { return lhs.normalizedKey < rhs.normalizedKey }
         return lhs.createdAt < rhs.createdAt
+    }
+
+    static func usageOrder(_ lhs: Tag, _ rhs: Tag) -> Bool {
+        if lhs.usageCount != rhs.usageCount { return lhs.usageCount > rhs.usageCount }
+        return lhs.name.localizedCompare(rhs.name) == .orderedAscending
     }
 }

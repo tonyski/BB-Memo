@@ -6,25 +6,24 @@
 //
 
 import SwiftUI
+import UIKit
 
 /// BB 品牌设计系统 - 极简/高级/紫色调
 enum AppTheme {
     // MARK: - 核心色彩
     
     static var brandAccent: Color {
-        #if os(iOS)
-        return Color(uiColor: .init { $0.userInterfaceStyle == .dark ? .init(white: 0.85, alpha: 1) : .init(white: 0.15, alpha: 1) })
-        #else
-        return Color.accentColor
-        #endif
+        Color(uiColor: .init {
+            $0.userInterfaceStyle == .dark
+                ? .init(white: 0.85, alpha: 1)
+                : .init(white: 0.15, alpha: 1)
+        })
     }
 
     static var onBrandAccent: Color {
-        #if os(iOS)
-        return Color(uiColor: .init { $0.userInterfaceStyle == .dark ? .black : .white })
-        #else
-        return .white
-        #endif
+        Color(uiColor: .init {
+            $0.userInterfaceStyle == .dark ? .black : .white
+        })
     }
     
     static let action = Color(red: 0.35, green: 0.4, blue: 0.5) // Slate/Cool Gray for actions
@@ -38,19 +37,11 @@ enum AppTheme {
     // MARK: - 视觉样式
     
     static var cardBackground: Color {
-        #if os(iOS)
         Color(UIColor.secondarySystemGroupedBackground)
-        #else
-        Color(NSColor.controlBackgroundColor)
-        #endif
     }
 
     static var background: Color {
-        #if os(iOS)
         Color(UIColor.systemGroupedBackground)
-        #else
-        Color(NSColor.windowBackgroundColor)
-        #endif
     }
     
     static var brandGradient: LinearGradient {

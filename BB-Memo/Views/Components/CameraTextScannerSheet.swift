@@ -5,7 +5,6 @@
 //  Created by Codex on 2026/2/14.
 //
 
-#if os(iOS)
 import SwiftUI
 import VisionKit
 
@@ -124,4 +123,3 @@ private struct CameraTextScannerView: UIViewControllerRepresentable {
         }
     }
 }
-#endif

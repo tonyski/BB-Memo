@@ -254,9 +254,10 @@ struct MemoCardView: View {
 
     @ViewBuilder
     private var tagsRow: some View {
-        if !memo.tagsList.isEmpty {
+        let tags = memo.tagsList
+        if !tags.isEmpty {
             FlowLayout(spacing: 6) {
-                ForEach(memo.tagsList) { tag in
+                ForEach(tags) { tag in
                     let color = AppTheme.tagColor(for: tag.name)
                     Button {
                         onTagTap?(tag)

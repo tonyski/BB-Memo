@@ -18,7 +18,7 @@ struct AISuggestionBar: View {
         Set(
             selectedTagNames.compactMap { name in
                 let normalized = Tag.normalize(name)
-                return normalized.isEmpty ? nil : normalized.lowercased()
+                return normalized.isEmpty ? nil : Tag.normalizedKey(for: normalized)
             }
         )
     }
@@ -41,7 +41,7 @@ struct AISuggestionBar: View {
                 .buttonStyle(.plain)
 
                 ForEach(suggestions) { suggestion in
-                    let suggestionKey = Tag.normalize(suggestion.name).lowercased()
+                    let suggestionKey = Tag.normalizedKey(for: suggestion.name)
                     let isSelected = selectedTagKeys.contains(suggestionKey)
                     Button { onAction(suggestion) } label: {
                         Text("#\(suggestion.name)")
@@ -106,12 +106,7 @@ struct TagPickerSheet: View {
 
     private static func makeFrequentTags(from allTags: [Tag]) -> [Tag] {
         allTags
-            .sorted { lhs, rhs in
-                let lCount = lhs.usageCount
-                let rCount = rhs.usageCount
-                if lCount != rCount { return lCount > rCount }
-                return lhs.name.localizedCompare(rhs.name) == .orderedAscending
-            }
+            .sorted(by: Tag.usageOrder)
             .prefix(12)
             .map { $0 }
     }
@@ -120,7 +115,7 @@ struct TagPickerSheet: View {
         Set(
             selectedTagNames.compactMap { name in
                 let normalized = Tag.normalize(name)
-                return normalized.isEmpty ? nil : normalized.lowercased()
+                return normalized.isEmpty ? nil : Tag.normalizedKey(for: normalized)
             }
         )
     }
@@ -129,7 +124,7 @@ struct TagPickerSheet: View {
         selectedTagNames.reduce(into: [String: String]()) { map, name in
             let normalized = Tag.normalize(name)
             guard !normalized.isEmpty else { return }
-            let key = normalized.lowercased()
+            let key = Tag.normalizedKey(for: normalized)
             if map[key] == nil {
                 map[key] = normalized
             }
@@ -142,7 +137,7 @@ struct TagPickerSheet: View {
 
         for tag in frequentTags {
             let normalized = Tag.normalize(tag.name)
-            let key = normalized.lowercased()
+            let key = Tag.normalizedKey(for: normalized)
             guard !key.isEmpty else { continue }
             if seen.insert(key).inserted {
                 result.append(DisplayTag(key: key, name: tag.name))
@@ -159,11 +154,7 @@ struct TagPickerSheet: View {
     }
 
     private var inputFieldBackgroundColor: Color {
-        #if os(macOS)
-        return Color.secondary.opacity(0.12)
-        #else
-        return Color.secondary.opacity(0.08)
-        #endif
+        Color.secondary.opacity(0.08)
     }
 
     private var isAddButtonDisabled: Bool {
@@ -181,10 +172,8 @@ struct TagPickerSheet: View {
                     HStack(spacing: 6) {
                         TextField("输入标签名，例如：工作", text: $input)
                             .autocorrectionDisabled()
-                            #if os(iOS)
                             .textInputAutocapitalization(.never)
                             .submitLabel(.done)
-                            #endif
                             .onSubmit {
                                 submitInputTag()
                             }
@@ -252,12 +241,7 @@ struct TagPickerSheet: View {
                 .padding(.bottom, 8)
             }
             .navigationTitle("添加标签")
-            #if os(macOS)
-            .frame(minWidth: 560, minHeight: 460)
-            #endif
-            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
@@ -278,10 +262,10 @@ enum EditorHelper {
     static func toggleTag(_ name: String, selectedTagNames: inout Set<String>) {
         let normalized = Tag.normalize(name)
         guard !normalized.isEmpty else { return }
-        let key = normalized.lowercased()
+        let key = Tag.normalizedKey(for: normalized)
 
         let matchedNames = selectedTagNames.filter {
-            Tag.normalize($0).lowercased() == key
+            Tag.normalizedKey(for: $0) == key
         }
 
         if matchedNames.isEmpty {
@@ -293,20 +277,4 @@ enum EditorHelper {
         }
     }
 
-    static func triggerAIAnalysis(
-        _ text: String,
-        existingTagNames: [String],
-        debounceTask: inout Task<Void, Never>?,
-        suggestions: Binding<[TagSuggestion]>
-    ) {
-        debounceTask?.cancel()
-        debounceTask = Task {
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            let result = TagExtractor.suggestTags(from: text, existingTagNames: existingTagNames)
-            await MainActor.run {
-                suggestions.wrappedValue = result
-            }
-        }
-    }
 }

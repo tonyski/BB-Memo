@@ -7,8 +7,10 @@ import Foundation
 import SwiftData
 
 enum FlomoImportService {
-    struct Summary {
+    struct Summary: Sendable {
+        let parsedCount: Int
         let importedCount: Int
+        let duplicateCount: Int
     }
 
     enum ImportError: LocalizedError {
@@ -22,22 +24,28 @@ enum FlomoImportService {
         }
     }
 
-    static func importFromFile(at url: URL, context: ModelContext) async throws -> Summary {
+    static func importFromFile(at url: URL, modelContainer: ModelContainer) async throws -> Summary {
         guard url.startAccessingSecurityScopedResource() else {
             throw ImportError.permissionDenied
         }
         defer { url.stopAccessingSecurityScopedResource() }
 
-        let html = try await Task.detached(priority: .userInitiated) {
-            try String(contentsOf: url, encoding: .utf8)
+        let flomoMemos = try await Task.detached(priority: .userInitiated) {
+            let html = try String(contentsOf: url, encoding: .utf8)
+            return FlomoImporter.parse(html: html)
         }.value
-        let flomoMemos = await Task.detached(priority: .userInitiated) {
-            FlomoImporter.parse(html: html)
-        }.value
+        let importer = FlomoImportActor(modelContainer: modelContainer)
+        return try await importer.importMemos(flomoMemos)
+    }
+}
 
-        var tagLookup = try makeTagLookup(in: context)
-        var memoIdentityLookup = try makeMemoIdentityLookup(in: context)
+@ModelActor
+private actor FlomoImportActor {
+    func importMemos(_ flomoMemos: [FlomoMemo]) throws -> FlomoImportService.Summary {
+        var tagLookup = try makeTagLookup()
+        var memoIdentityLookup = try makeMemoIdentityLookup()
         var importedCount = 0
+        var duplicateCount = 0
         let importedAt = Date.now
 
         for flomoMemo in flomoMemos {
@@ -49,22 +57,23 @@ enum FlomoImportService {
             let sourceIdentity = Memo.makeImportIdentity(
                 sourceType: "flomo_html",
                 sourceIdentifier: sourceIdentifier,
-                contentHash: contentHash,
                 content: flomoMemo.content,
                 createdAt: flomoMemo.createdAt
             )
             let legacyIdentity = makeLegacyIdentity(
-                contentHash: contentHash,
                 content: flomoMemo.content,
                 createdAt: flomoMemo.createdAt
             )
             guard !memoIdentityLookup.contains(sourceIdentity),
-                  !memoIdentityLookup.contains(legacyIdentity) else { continue }
+                  !memoIdentityLookup.contains(legacyIdentity) else {
+                duplicateCount += 1
+                continue
+            }
             memoIdentityLookup.insert(sourceIdentity)
             memoIdentityLookup.insert(legacyIdentity)
 
             let tagNames = TagExtractor.extractHashtags(from: flomoMemo.content)
-            let tags = resolveTags(tagNames, tagLookup: &tagLookup, context: context)
+            let tags = resolveTags(tagNames, tagLookup: &tagLookup)
 
             let newMemo = Memo(
                 content: flomoMemo.content,
@@ -75,36 +84,37 @@ enum FlomoImportService {
                 importedAt: importedAt,
                 tags: tags
             )
-            context.insert(newMemo)
+            modelContext.insert(newMemo)
+            for tag in tags {
+                tag.usageCount += 1
+            }
             importedCount += 1
         }
 
         do {
-            try context.save()
+            try modelContext.save()
         } catch {
-            context.rollback()
+            modelContext.rollback()
             throw error
         }
-        do {
-            try TagUsageCounter.resyncAll(in: context)
-        } catch {
-            print("FlomoImportService tag resync failed: \(error)")
-        }
-        return Summary(importedCount: importedCount)
+        return FlomoImportService.Summary(
+            parsedCount: flomoMemos.count,
+            importedCount: importedCount,
+            duplicateCount: duplicateCount
+        )
     }
 
-    private static func makeTagLookup(in context: ModelContext) throws -> [String: Tag] {
-        let existingTags = try context.fetch(FetchDescriptor<Tag>())
+    private func makeTagLookup() throws -> [String: Tag] {
+        let existingTags = try modelContext.fetch(FetchDescriptor<Tag>())
         var lookup: [String: Tag] = [:]
         for tag in existingTags {
-            let key = tag.normalizedName.isEmpty ? Tag.normalize(tag.name).lowercased() : tag.normalizedName
-            lookup[key] = tag
+            lookup[tag.normalizedKey] = tag
         }
         return lookup
     }
 
-    private static func makeMemoIdentityLookup(in context: ModelContext) throws -> Set<String> {
-        let existingMemos = try context.fetch(FetchDescriptor<Memo>())
+    private func makeMemoIdentityLookup() throws -> Set<String> {
+        let existingMemos = try modelContext.fetch(FetchDescriptor<Memo>())
         var lookup = Set<String>()
         lookup.reserveCapacity(existingMemos.count * 2)
 
@@ -112,7 +122,6 @@ enum FlomoImportService {
             lookup.insert(memo.importIdentity)
             lookup.insert(
                 makeLegacyIdentity(
-                    contentHash: memo.contentHash,
                     content: memo.content,
                     createdAt: memo.createdAt
                 )
@@ -121,28 +130,25 @@ enum FlomoImportService {
         return lookup
     }
 
-    private static func makeFlomoSourceIdentifier(createdAt: Date, contentHash: String) -> String {
+    private func makeFlomoSourceIdentifier(createdAt: Date, contentHash: String) -> String {
         "\(Int(createdAt.timeIntervalSince1970))_\(contentHash)"
     }
 
-    private static func makeLegacyIdentity(
-        contentHash: String,
+    private func makeLegacyIdentity(
         content: String,
         createdAt: Date
     ) -> String {
         Memo.makeImportIdentity(
             sourceType: nil,
             sourceIdentifier: nil,
-            contentHash: contentHash,
             content: content,
             createdAt: createdAt
         )
     }
 
-    private static func resolveTags(
+    private func resolveTags(
         _ names: [String],
-        tagLookup: inout [String: Tag],
-        context: ModelContext
+        tagLookup: inout [String: Tag]
     ) -> [Tag] {
         var results: [Tag] = []
         var seen = Set<String>()
@@ -150,14 +156,14 @@ enum FlomoImportService {
         for name in names {
             let normalizedName = Tag.normalize(name)
             guard !normalizedName.isEmpty else { continue }
-            let key = normalizedName.lowercased()
+            let key = Tag.normalizedKey(for: normalizedName)
             guard seen.insert(key).inserted else { continue }
 
             if let existing = tagLookup[key] {
                 results.append(existing)
             } else {
                 let newTag = Tag(name: normalizedName)
-                context.insert(newTag)
+                modelContext.insert(newTag)
                 tagLookup[key] = newTag
                 results.append(newTag)
             }

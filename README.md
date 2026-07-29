@@ -1,6 +1,6 @@
 # BB Memo
 
-BB Memo 是一款面向 iOS / macOS 的轻量笔记应用，强调快速记录、标签整理、时间线回顾与跨设备同步。
+BB Memo 是一款面向 iPhone 和 iPad 的轻量笔记应用，强调快速记录、标签整理、时间线回顾与跨设备同步。
 
 ## 功能概览
 
@@ -33,7 +33,7 @@ BB Memo 是一款面向 iOS / macOS 的轻量笔记应用，强调快速记录�
 - `createdAt: Date`
 - `updatedAt: Date`
 - `isPinned: Bool`
-- `isDeleted: Bool`：兼容旧字段
+- `legacyIsDeleted: Bool`：映射并兼容旧数据库中的 `isDeleted` 字段
 - `deletedAt: Date?`：回收站状态单一判定来源（`deletedAt != nil`）
 - `reminderDate: Date?`
 - `sourceType: String?`
@@ -61,7 +61,6 @@ BB Memo 是一款面向 iOS / macOS 的轻量笔记应用，强调快速记录�
 
 - Xcode（建议最新稳定版）
 - iOS Deployment Target: `17.0`
-- macOS Deployment Target: `14.0`
 
 ## 本地运行
 
@@ -71,11 +70,13 @@ cd BB-Memo
 open BB-Memo.xcodeproj
 ```
 
-在 Xcode 中选择 iOS Simulator 或 macOS 目标运行即可。
+在 Xcode 中选择 iPhone / iPad 模拟器或真机运行即可。
 
 ## 同步与导入说明
 
 - iCloud 同步需用户登录 iCloud 并授权
+- SwiftData 会自动安排 CloudKit 上传和下载；设置页的“检查同步”用于保存本地更改、检查账号连接并展示真实的上传/下载事件
+- iOS target 需启用 iCloud、CloudKit、Push Notifications，以及 Background Modes > Remote notifications
+- 发布前需在 CloudKit Console 将开发环境 Schema 部署到 Production
 - 若 CloudKit 不可用，应用会自动降级到本地或临时模式
 - flomo 导入入口在设置页，仅支持 flomo 导出的 HTML 文件
-

@@ -8,34 +8,34 @@ import CloudKit
 import SwiftData
 import Combine
 import CoreData
+import OSLog
 
-enum SyncLogLevel: String {
-    case info
-    case success
-    case warning
-    case error
-}
+enum CloudSyncState: Equatable {
+    case disabled
+    case idle
+    case syncing
+    case succeeded
+    case failed(String)
 
-struct SyncLogEntry: Identifiable {
-    let id = UUID()
-    let date: Date
-    let level: SyncLogLevel
-    let message: String
+    var label: String {
+        switch self {
+        case .disabled: return "未启用"
+        case .idle: return "等待同步"
+        case .syncing: return "同步中"
+        case .succeeded: return "最近同步成功"
+        case .failed: return "同步失败"
+        }
+    }
 }
 
 enum AppStorageMode: Equatable {
     case cloudKit
-    case localFallback
     case inMemoryFallback
 
     var label: String {
         switch self {
-        case .cloudKit:
-            return "云端同步（推荐）"
-        case .localFallback:
-            return "仅保存在本机"
-        case .inMemoryFallback:
-            return "临时模式（退出后清空）"
+        case .cloudKit: return "iCloud"
+        case .inMemoryFallback: return "存储不可用"
         }
     }
 }
@@ -43,74 +43,67 @@ enum AppStorageMode: Equatable {
 struct AppContainerBootstrap {
     let container: ModelContainer
     let storageMode: AppStorageMode
-    let startupMessage: String?
 }
 
 enum AppContainerFactory {
     static let iCloudContainerIdentifier = "iCloud.com.tonyski.BB-Memo"
+    private static let logger = Logger(
+        subsystem: "com.tonyski.BB-Memo",
+        category: "PersistentStore"
+    )
 
     static func make() -> AppContainerBootstrap {
-        let schema = Schema([
-            Memo.self,
-            Tag.self,
-        ])
+        let schema = Schema([Memo.self, Tag.self])
         let cloudConfiguration = ModelConfiguration(
             schema: schema,
             isStoredInMemoryOnly: false,
             cloudKitDatabase: .automatic
         )
-        let localConfiguration = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: false
-        )
-        let inMemoryConfiguration = ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: true
-        )
 
         do {
-            let container = try ModelContainer(for: schema, configurations: [cloudConfiguration])
-            return AppContainerBootstrap(container: container, storageMode: .cloudKit, startupMessage: nil)
-        } catch let cloudError {
-            let cloudErrorMessage = "CloudKit 初始化失败：\(cloudError.localizedDescription)"
-            do {
-                let container = try ModelContainer(for: schema, configurations: [localConfiguration])
-                return AppContainerBootstrap(
-                    container: container,
-                    storageMode: .localFallback,
-                    startupMessage: cloudErrorMessage
-                )
-            } catch let localError {
-                return makeInMemoryBootstrap(
-                    schema: schema,
-                    inMemoryConfiguration: inMemoryConfiguration,
-                    startupMessage: "\(cloudErrorMessage)；本地失败：\(localError.localizedDescription)。已保留本地数据库文件，未执行自动清理。",
-                    cloudError: cloudError,
-                    localError: localError
-                )
-            }
+            let container = try ModelContainer(
+                for: schema,
+                configurations: [cloudConfiguration]
+            )
+            return AppContainerBootstrap(container: container, storageMode: .cloudKit)
+        } catch {
+            logger.error(
+                "CloudKit store initialization failed: \(errorDetails(error), privacy: .public)"
+            )
+            return makeUnavailableBootstrap(schema: schema, cloudError: error)
         }
     }
 
-    private static func makeInMemoryBootstrap(
+    private static func errorDetails(_ error: Error) -> String {
+        let nsError = error as NSError
+        var details = "\(nsError.domain)(\(nsError.code)): \(nsError.localizedDescription)"
+        if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            details += " | underlying: \(errorDetails(underlyingError))"
+        }
+        return details
+    }
+
+    private static func makeUnavailableBootstrap(
         schema: Schema,
-        inMemoryConfiguration: ModelConfiguration,
-        startupMessage: String,
-        cloudError: Error,
-        localError: Error,
-        retryError: Error? = nil
+        cloudError: Error
     ) -> AppContainerBootstrap {
+        let configuration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: true,
+            cloudKitDatabase: .none
+        )
         do {
-            let container = try ModelContainer(for: schema, configurations: [inMemoryConfiguration])
+            let container = try ModelContainer(
+                for: schema,
+                configurations: [configuration]
+            )
             return AppContainerBootstrap(
                 container: container,
-                storageMode: .inMemoryFallback,
-                startupMessage: startupMessage
+                storageMode: .inMemoryFallback
             )
         } catch {
-            let retryPart = retryError.map { ", retryError=\($0)" } ?? ""
             fatalError(
-                "Could not create ModelContainer. cloudError=\(cloudError), localError=\(localError)\(retryPart), inMemoryError=\(error)"
+                "Could not create ModelContainer. cloudError=\(cloudError), inMemoryError=\(error)"
             )
         }
     }
@@ -119,124 +112,140 @@ enum AppContainerFactory {
 @MainActor
 final class SyncDiagnostics: ObservableObject {
     let iCloudContainerIdentifier: String
+    let storageMode: AppStorageMode
 
-    @Published private(set) var storageMode: AppStorageMode
-    @Published private(set) var startupMessage: String?
     @Published private(set) var accountStatus: CKAccountStatus = .couldNotDetermine
-    @Published private(set) var lastStatusCheckDate: Date?
     @Published private(set) var accountStatusMessage: String?
-    @Published private(set) var isManualSyncInProgress = false
-    @Published private(set) var lastManualSyncDate: Date?
-    @Published private(set) var syncLogs: [SyncLogEntry] = []
+    @Published private(set) var syncState: CloudSyncState
+    @Published private(set) var lastCloudSyncDate: Date?
 
     private var cancellables = Set<AnyCancellable>()
-    private let maxLogCount = 120
+    private var activeCloudEvents = Set<UUID>()
+    private var currentBatchFailure: String?
+    private var batchHasDataTransfer = false
+    private var cloudRefreshTask: Task<Void, Never>?
+    private let lastSuccessfulTransferKey: String
 
-    init(iCloudContainerIdentifier: String, storageMode: AppStorageMode, startupMessage: String?) {
+    init(iCloudContainerIdentifier: String, storageMode: AppStorageMode) {
+        let transferKey =
+            "cloudSync.lastSuccessfulTransfer.\(iCloudContainerIdentifier)"
+        let persistedTransferDate = UserDefaults.standard.object(
+            forKey: transferKey
+        ) as? Date
+
         self.iCloudContainerIdentifier = iCloudContainerIdentifier
         self.storageMode = storageMode
-        self.startupMessage = startupMessage
-        appendLog(level: .info, "同步诊断已启动，当前模式：\(storageMode.label)")
-        if let startupMessage, !startupMessage.isEmpty {
-            appendLog(level: .warning, startupMessage)
-        }
-        observeSyncSignals()
-    }
+        self.syncState = storageMode == .cloudKit
+            ? (persistedTransferDate == nil ? .idle : .succeeded)
+            : .disabled
+        self.lastSuccessfulTransferKey = transferKey
+        self.lastCloudSyncDate = persistedTransferDate
 
-    var syncSummary: String {
-        switch storageMode {
-        case .cloudKit:
-            if accountStatus == .available {
-                return "云同步已开启，内容会自动同步到你的其他设备。"
-            }
-            return "已开启云同步，但当前账号状态异常，暂时无法同步。"
-        case .localFallback:
-            return "当前仅保存在本机，内容不会同步到其他设备。"
-        case .inMemoryFallback:
-            return "当前是临时模式，退出应用后数据不会保留。"
+        if storageMode == .cloudKit {
+            observeSyncSignals()
         }
     }
 
     func refreshAccountStatus() async {
-        lastStatusCheckDate = .now
-        appendLog(level: .info, "开始检查 iCloud 账号状态")
+        guard storageMode == .cloudKit else {
+            accountStatus = .couldNotDetermine
+            accountStatusMessage = "iCloud 存储未启用"
+            return
+        }
+
         do {
-            let container = CKContainer(identifier: iCloudContainerIdentifier)
-            let status = try await container.accountStatus()
-            accountStatus = status
+            accountStatus = try await CKContainer(
+                identifier: iCloudContainerIdentifier
+            ).accountStatus()
             accountStatusMessage = nil
-            appendLog(level: status == .available ? .success : .warning, "账号状态：\(accountStatusLabel(status))")
         } catch {
             accountStatus = .couldNotDetermine
             accountStatusMessage = error.localizedDescription
-            appendLog(level: .error, "账号状态检查失败：\(error.localizedDescription)")
-        }
-    }
-
-    func triggerManualSync(using context: ModelContext) async {
-        guard !isManualSyncInProgress else {
-            appendLog(level: .warning, "已有手动同步任务正在进行")
-            return
-        }
-
-        syncLogs.removeAll()
-        isManualSyncInProgress = true
-        appendLog(level: .info, "开始手动同步：检查账号并提交本地事务")
-        defer {
-            isManualSyncInProgress = false
-            lastManualSyncDate = .now
-        }
-
-        await refreshAccountStatus()
-
-        guard storageMode == .cloudKit else {
-            appendLog(level: .warning, "当前不是云同步模式，无法执行跨设备同步")
-            return
-        }
-        guard accountStatus == .available else {
-            appendLog(level: .warning, "iCloud 账号不可用，已跳过手动同步")
-            return
-        }
-
-        do {
-            try context.save()
-            appendLog(level: .success, "本次更改已保存，稍后会自动同步到云端")
-        } catch {
-            appendLog(level: .error, "本地事务提交失败：\(error.localizedDescription)")
         }
     }
 
     private func observeSyncSignals() {
+        NotificationCenter.default.publisher(
+            for: NSPersistentCloudKitContainer.eventChangedNotification
+        )
+        .receive(on: RunLoop.main)
+        .sink { [weak self] notification in
+            self?.handleCloudKitEvent(notification)
+        }
+        .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.appendLog(level: .info, "检测到远端数据变更通知")
-            }
-            .store(in: &cancellables)
-
-        NotificationCenter.default.publisher(for: .memoDataChanged)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                self?.appendLog(level: .info, "检测到本地数据变更")
+                self?.scheduleCloudDataRefresh()
             }
             .store(in: &cancellables)
     }
 
-    private func appendLog(level: SyncLogLevel, _ message: String) {
-        syncLogs.append(SyncLogEntry(date: .now, level: level, message: message))
-        if syncLogs.count > maxLogCount {
-            syncLogs.removeFirst(syncLogs.count - maxLogCount)
+    private func handleCloudKitEvent(_ notification: Notification) {
+        guard let event = notification.userInfo?[
+            NSPersistentCloudKitContainer.eventNotificationUserInfoKey
+        ] as? NSPersistentCloudKitContainer.Event else {
+            return
+        }
+
+        let isDataTransfer = event.type == .import || event.type == .export
+        guard event.endDate != nil else {
+            if activeCloudEvents.isEmpty {
+                currentBatchFailure = nil
+                batchHasDataTransfer = false
+            }
+            activeCloudEvents.insert(event.identifier)
+            batchHasDataTransfer = batchHasDataTransfer || isDataTransfer
+            syncState = .syncing
+            return
+        }
+
+        let wasTracked = activeCloudEvents.remove(event.identifier) != nil
+        if !wasTracked, activeCloudEvents.isEmpty {
+            currentBatchFailure = nil
+            batchHasDataTransfer = false
+        }
+        batchHasDataTransfer = batchHasDataTransfer || isDataTransfer
+
+        if event.succeeded {
+            if isDataTransfer {
+                recordSuccessfulTransfer(at: event.endDate ?? .now)
+            }
+            if event.type == .import {
+                scheduleCloudDataRefresh()
+            }
+        } else {
+            currentBatchFailure = event.error?.localizedDescription ?? "未知错误"
+        }
+
+        guard activeCloudEvents.isEmpty else {
+            syncState = .syncing
+            return
+        }
+
+        if let currentBatchFailure {
+            syncState = .failed(currentBatchFailure)
+        } else {
+            syncState = batchHasDataTransfer || lastCloudSyncDate != nil
+                ? .succeeded
+                : .idle
         }
     }
 
-    private func accountStatusLabel(_ status: CKAccountStatus) -> String {
-        switch status {
-        case .available: return "已连接"
-        case .noAccount: return "未登录 iCloud"
-        case .restricted: return "系统限制"
-        case .temporarilyUnavailable: return "服务暂不可用"
-        case .couldNotDetermine: return "检查失败"
-        @unknown default: return "未知状态"
+    private func recordSuccessfulTransfer(at date: Date) {
+        guard lastCloudSyncDate.map({ date > $0 }) ?? true else { return }
+        lastCloudSyncDate = date
+        UserDefaults.standard.set(date, forKey: lastSuccessfulTransferKey)
+    }
+
+    private func scheduleCloudDataRefresh() {
+        cloudRefreshTask?.cancel()
+        cloudRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            AppNotifications.postCloudDataChanged()
+            self?.cloudRefreshTask = nil
         }
     }
 }
