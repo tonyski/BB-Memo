@@ -105,8 +105,7 @@ struct TagPickerSheet: View {
     }
 
     private static func makeFrequentTags(from allTags: [Tag]) -> [Tag] {
-        allTags
-            .sorted(by: Tag.usageOrder)
+        Tag.sortedByUsage(allTags)
             .prefix(12)
             .map { $0 }
     }

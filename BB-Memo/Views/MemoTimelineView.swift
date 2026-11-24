@@ -287,18 +287,29 @@ struct MemoTimelineView: View {
 
     // MARK: - Paging
 
-    private func resetAndReload() {
+    /// - Parameter preservingLoadedCount: 数据变化（含 iCloud 同步）触发的刷新保留已加载条数，
+    ///   避免用户翻到深处时被重置回第一页。
+    private func resetAndReload(preservingLoadedCount: Bool = false) {
         reloadTask?.cancel()
         loadErrorMessage = nil
+        let limit = preservingLoadedCount
+            ? max(pageSize, displayedMemos.count)
+            : pageSize
         if isRecycleBinSelected {
-            loadRecycleBin()
+            loadRecycleBin(limit: limit)
             return
+        }
+
+        // 选中的标签可能已被删除（其他设备删除，或同名标签合并），
+        // 访问已删除模型的属性会直接崩溃，必须先校验。
+        if selectedTag != nil, !isSelectedTagAlive() {
+            selectedTag = nil
         }
 
         if let selectedTag {
             selectedTagSortedMemos = MemoFilter.apply(selectedTag.memosList)
             totalMemoCount = selectedTagSortedMemos.count
-            let firstPage = Array(selectedTagSortedMemos.prefix(pageSize))
+            let firstPage = Array(selectedTagSortedMemos.prefix(limit))
             displayedMemos = firstPage
             paging = PagingState(
                 tagLoadedCount: firstPage.count,
@@ -314,7 +325,7 @@ struct MemoTimelineView: View {
             displayedMemos = try MemoQueryService.fetchActivePage(
                 in: modelContext,
                 cursor: &freshPaging.cursor,
-                limit: pageSize
+                limit: limit
             )
             freshPaging.canLoadMore = displayedMemos.count < totalMemoCount
             paging = freshPaging
@@ -382,18 +393,32 @@ struct MemoTimelineView: View {
         reloadTask = Task {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            resetAndReload()
+            resetAndReload(preservingLoadedCount: true)
         }
     }
 
-    private func loadRecycleBin() {
+    private func isSelectedTagAlive() -> Bool {
+        guard let selectedTag else { return false }
+        // `Tag` 没有遮蔽 `PersistentModel.isDeleted`，这里读到的是 SwiftData 的删除状态。
+        guard selectedTag.modelContext != nil, !selectedTag.isDeleted else { return false }
+        let tagID = selectedTag.persistentModelID
+        var descriptor = FetchDescriptor<Tag>(
+            predicate: #Predicate<Tag> { $0.persistentModelID == tagID }
+        )
+        descriptor.fetchLimit = 1
+        // 查询本身失败时不误清选中状态，只依赖上面的检查。
+        guard let count = try? modelContext.fetchCount(descriptor) else { return true }
+        return count > 0
+    }
+
+    private func loadRecycleBin(limit: Int) {
         do {
             totalMemoCount = try MemoQueryService.recycleBinCount(in: modelContext)
             var freshPaging = PagingState()
             let firstPage = try MemoQueryService.fetchRecycleBinPage(
                 in: modelContext,
                 cursor: &freshPaging.cursor,
-                limit: pageSize
+                limit: limit
             )
             freshPaging.canLoadMore =
                 freshPaging.cursor.recycleBinOffset < totalMemoCount

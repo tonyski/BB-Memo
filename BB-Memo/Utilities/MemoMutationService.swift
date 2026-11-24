@@ -6,7 +6,7 @@
 import Foundation
 import SwiftData
 
-/// 统一的写入入口：创建/更新/删除 Memo 与 Tag，并在保存前做标签计数校准。
+/// 统一的写入入口：创建/更新/删除 Memo 与 Tag。
 enum MemoMutationService {
     static func upsertMemo(
         memo: Memo?,
@@ -20,8 +20,6 @@ enum MemoMutationService {
 
         let targetMemo: Memo
         if let memo {
-            let previousTags = memo.tags ?? []
-            let wasActive = !memo.isInRecycleBin
             memo.content = trimmedContent
             memo.refreshContentHash()
             memo.updatedAt = .now
@@ -29,22 +27,10 @@ enum MemoMutationService {
             memo.deletedAt = nil
             memo.reminderDate = reminderDate
             memo.tags = tags
-            updateUsageCounts(
-                previousTags: previousTags,
-                wasActive: wasActive,
-                currentTags: tags,
-                isActive: true
-            )
             targetMemo = memo
         } else {
             let newMemo = Memo(content: trimmedContent, reminderDate: reminderDate, tags: tags)
             context.insert(newMemo)
-            updateUsageCounts(
-                previousTags: [],
-                wasActive: false,
-                currentTags: tags,
-                isActive: true
-            )
             targetMemo = newMemo
         }
 
@@ -53,44 +39,22 @@ enum MemoMutationService {
     }
 
     static func deleteMemo(_ memo: Memo, context: ModelContext) throws {
-        let wasActive = !memo.isInRecycleBin
         memo.isDeleted = true
         memo.deletedAt = .now
         memo.updatedAt = .now
         memo.reminderDate = nil
-        updateUsageCounts(
-            previousTags: memo.tags ?? [],
-            wasActive: wasActive,
-            currentTags: memo.tags ?? [],
-            isActive: false
-        )
         try save(context)
     }
 
     static func restoreMemo(_ memo: Memo, context: ModelContext) throws {
-        let wasActive = !memo.isInRecycleBin
         memo.isDeleted = false
         memo.deletedAt = nil
         memo.updatedAt = .now
-        updateUsageCounts(
-            previousTags: memo.tags ?? [],
-            wasActive: wasActive,
-            currentTags: memo.tags ?? [],
-            isActive: true
-        )
         try save(context)
     }
 
     static func permanentlyDeleteMemo(_ memo: Memo, context: ModelContext) throws {
-        let tags = memo.tags ?? []
-        let wasActive = !memo.isInRecycleBin
         context.delete(memo)
-        updateUsageCounts(
-            previousTags: tags,
-            wasActive: wasActive,
-            currentTags: [],
-            isActive: false
-        )
         try save(context)
     }
 
@@ -154,28 +118,5 @@ enum MemoMutationService {
             }
         }
         return resolved
-    }
-
-    /// 只更新本次关系变更涉及的标签，避免每次写入都扫描整个数据库。
-    private static func updateUsageCounts(
-        previousTags: [Tag],
-        wasActive: Bool,
-        currentTags: [Tag],
-        isActive: Bool
-    ) {
-        let previous = previousTags.reduce(into: [ObjectIdentifier: Tag]()) {
-            $0[ObjectIdentifier($1)] = $1
-        }
-        let current = currentTags.reduce(into: [ObjectIdentifier: Tag]()) {
-            $0[ObjectIdentifier($1)] = $1
-        }
-        let identifiers = Set(previous.keys).union(current.keys)
-
-        for identifier in identifiers {
-            guard let tag = current[identifier] ?? previous[identifier] else { continue }
-            let oldContribution = wasActive && previous[identifier] != nil ? 1 : 0
-            let newContribution = isActive && current[identifier] != nil ? 1 : 0
-            tag.usageCount = max(tag.usageCount + newContribution - oldContribution, 0)
-        }
     }
 }

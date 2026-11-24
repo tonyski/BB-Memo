@@ -80,8 +80,7 @@ struct MemoEditorView: View {
         }
     }
     private var frequentTagSuggestions: [TagSuggestion] {
-        allTags
-            .sorted(by: Tag.usageOrder)
+        Tag.sortedByUsage(allTags)
             .prefix(3)
             .map { TagSuggestion(name: $0.name) }
     }

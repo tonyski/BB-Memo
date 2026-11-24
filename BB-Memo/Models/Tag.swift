@@ -13,18 +13,23 @@ final class Tag: Identifiable {
     var name: String = ""
     var normalizedName: String = ""
     var createdAt: Date = Foundation.Date.now
-    /// 标签被多少条 Memo 使用（持久化计数，用于高性能排序/展示）
+    /// 已废弃：仅为兼容 CloudKit 中已有的字段而保留，不再读写。
+    /// 它是派生数据，各设备在同步中途算出的值不同，写回后会互相覆盖、反复触发同步。
+    /// 使用次数请用 `activeMemoCount` 在本地计算。
     var usageCount: Int = 0
 
     var memos: [Memo]?
     var memosList: [Memo] { memos ?? [] }
+    /// 未进回收站的关联笔记数，只在本地计算，不持久化。
+    var activeMemoCount: Int {
+        memosList.reduce(0) { $1.isInRecycleBin ? $0 : $0 + 1 }
+    }
 
-    init(name: String, createdAt: Date = .now, usageCount: Int = 0, memos: [Memo] = []) {
+    init(name: String, createdAt: Date = .now, memos: [Memo] = []) {
         let normalized = Tag.normalize(name)
         self.name = normalized
         self.normalizedName = normalized.lowercased()
         self.createdAt = createdAt
-        self.usageCount = usageCount
         self.memos = memos
     }
 
@@ -46,8 +51,24 @@ final class Tag: Identifiable {
         return lhs.createdAt < rhs.createdAt
     }
 
-    static func usageOrder(_ lhs: Tag, _ rhs: Tag) -> Bool {
-        if lhs.usageCount != rhs.usageCount { return lhs.usageCount > rhs.usageCount }
-        return lhs.name.localizedCompare(rhs.name) == .orderedAscending
+    /// 本地计算每个标签的使用次数（每个标签只遍历一次关系）。
+    static func usageCounts(for tags: [Tag]) -> [PersistentIdentifier: Int] {
+        tags.reduce(into: [PersistentIdentifier: Int]()) {
+            $0[$1.persistentModelID] = $1.activeMemoCount
+        }
+    }
+
+    /// 按使用次数降序、名称升序排序。
+    static func sortedByUsage(
+        _ tags: [Tag],
+        counts: [PersistentIdentifier: Int]? = nil
+    ) -> [Tag] {
+        let counts = counts ?? usageCounts(for: tags)
+        return tags.sorted { lhs, rhs in
+            let lhsCount = counts[lhs.persistentModelID, default: 0]
+            let rhsCount = counts[rhs.persistentModelID, default: 0]
+            if lhsCount != rhsCount { return lhsCount > rhsCount }
+            return lhs.name.localizedCompare(rhs.name) == .orderedAscending
+        }
     }
 }

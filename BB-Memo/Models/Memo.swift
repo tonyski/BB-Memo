@@ -19,7 +19,10 @@ final class Memo {
     var createdAt: Date = Foundation.Date.now
     var updatedAt: Date = Foundation.Date.now
     var isPinned: Bool = false
-    /// 兼容已有 CloudKit 存储的历史字段；业务逻辑统一使用 `deletedAt`。
+    /// 兼容已有 CloudKit 存储的历史字段；业务逻辑统一使用 `deletedAt`，本字段只做镜像。
+    /// 注意：它遮蔽了 `PersistentModel.isDeleted`（SwiftData 的删除状态），
+    /// 在具体类型 `Memo` 上读到的是回收站镜像而非框架状态。
+    /// 不能直接改名：改名会变更 CloudKit 字段（CD_isDeleted），需要重新部署生产环境 schema。
     var isDeleted: Bool = false
     var deletedAt: Date?
     var reminderDate: Date?
@@ -101,17 +104,29 @@ final class Memo {
 
 enum MemoMaintenance {
     /// 修复旧模型字段和派生值。由调用方统一读取并保存，避免维护流程重复查询。
+    ///
+    /// 每台设备都会独立执行本方法并把结果同步出去，因此所有修复都必须是确定性的：
+    /// 同样的数据在任何设备上都得出同样的结果，否则设备之间会反复覆盖对方。
     nonisolated static func reconcile(_ memos: [Memo]) -> Bool {
         var hasChanges = false
         var seenStableIDs = Set<UUID>()
 
-        for memo in memos {
+        // 按跨设备一致的字段排序后再去重，保证各设备保留同一条记录的 stableID。
+        let ordered = memos.sorted(by: stableIdentityOrder)
+        for memo in ordered {
             if seenStableIDs.contains(memo.stableID) {
-                memo.stableID = UUID()
+                // 完全相同的重复记录会派生出相同 ID，继续从新 ID 派生直到不冲突。
+                var candidate = deterministicStableID(for: memo, base: memo.stableID)
+                while seenStableIDs.contains(candidate) {
+                    candidate = deterministicStableID(for: memo, base: candidate)
+                }
+                memo.stableID = candidate
                 hasChanges = true
             }
             seenStableIDs.insert(memo.stableID)
+        }
 
+        for memo in memos {
             let expectedContentHash = Memo.computeContentHash(for: memo.content)
             if memo.contentHash != expectedContentHash {
                 memo.contentHash = expectedContentHash
@@ -121,16 +136,37 @@ enum MemoMaintenance {
                 memo.updatedAt = memo.createdAt
                 hasChanges = true
             }
-            if memo.isDeleted && memo.deletedAt == nil {
-                memo.deletedAt = memo.updatedAt
-                hasChanges = true
-            }
-            if memo.deletedAt != nil && !memo.isDeleted {
-                memo.isDeleted = true
+            // `deletedAt` 是回收站状态的唯一依据，`isDeleted` 只跟随它。
+            // 两个字段在 CloudKit 中独立合并，并发删除/恢复后可能不一致；
+            // 旧逻辑在不一致时一律判为"已删除"，会把刚恢复的笔记重新放回回收站。
+            let shouldBeDeleted = memo.deletedAt != nil
+            if memo.isDeleted != shouldBeDeleted {
+                memo.isDeleted = shouldBeDeleted
                 hasChanges = true
             }
         }
 
         return hasChanges
+    }
+
+    /// 只用跨设备完全一致的字段排序（不用日期：CloudKit 会把日期截到毫秒，
+    /// 创建设备本地却是完整精度）。完全相同的记录无论怎么排结果都等价。
+    private nonisolated static func stableIdentityOrder(_ lhs: Memo, _ rhs: Memo) -> Bool {
+        let lhsHash = Memo.computeContentHash(for: lhs.content)
+        let rhsHash = Memo.computeContentHash(for: rhs.content)
+        if lhsHash != rhsHash { return lhsHash < rhsHash }
+        return lhs.sourceIdentifier ?? "" < rhs.sourceIdentifier ?? ""
+    }
+
+    /// 由记录内容派生新 ID：多台设备独立修复同一组重复时会得到相同结果。
+    private nonisolated static func deterministicStableID(for memo: Memo, base: UUID) -> UUID {
+        let seed = "\(base.uuidString)|" + Memo.computeContentHash(for: memo.content)
+        var bytes = Array(SHA256.hash(data: Data(seed.utf8)).prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50 // version 5 风格
+        bytes[8] = (bytes[8] & 0x3F) | 0x80 // RFC 4122 variant
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
     }
 }

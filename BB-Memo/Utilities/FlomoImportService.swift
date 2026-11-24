@@ -85,9 +85,6 @@ private actor FlomoImportActor {
                 tags: tags
             )
             modelContext.insert(newMemo)
-            for tag in tags {
-                tag.usageCount += 1
-            }
             importedCount += 1
         }
 

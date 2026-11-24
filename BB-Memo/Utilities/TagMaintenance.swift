@@ -5,16 +5,16 @@
 //  Created by Codex on 2026/2/12.
 //
 
+import Foundation
 import SwiftData
 
-/// 合并跨设备产生的同名标签，并维护规范化名称与使用计数。
+/// 合并跨设备产生的同名标签，并维护规范化名称。
+///
+/// 每台设备都会独立执行合并并把结果同步出去，因此"保留哪一个"必须在所有设备上一致，
+/// 否则两台设备会各删一个，最终同名标签全部消失。
+/// 使用次数是派生数据，不在这里写库（见 `Tag.activeMemoCount`）。
 enum TagMaintenance {
-    /// 复用调用方读取的数据，使 Memo 与 Tag 的维护保持在同一个事务中。
-    nonisolated static func reconcile(
-        tags: [Tag],
-        memos: [Memo],
-        in context: ModelContext
-    ) -> Bool {
+    nonisolated static func reconcile(tags: [Tag], in context: ModelContext) -> Bool {
         var hasChanges = false
         var tagsByNormalizedName: [String: [Tag]] = [:]
 
@@ -29,34 +29,15 @@ enum TagMaintenance {
             }
         }
 
-        var removedTags = Set<ObjectIdentifier>()
         for duplicates in tagsByNormalizedName.values where duplicates.count > 1 {
-            let ordered = duplicates.sorted(by: canonicalOrder)
-            guard let canonical = ordered.first else { continue }
+            guard let canonical = canonicalTag(in: duplicates) else {
+                // 无法在所有设备上得出一致结论时宁可暂留重复标签，也不冒险两边各删一个。
+                continue
+            }
 
-            for duplicate in ordered.dropFirst() {
+            for duplicate in duplicates where duplicate !== canonical {
                 merge(duplicate, into: canonical)
-                removedTags.insert(ObjectIdentifier(duplicate))
                 context.delete(duplicate)
-                hasChanges = true
-            }
-        }
-
-        var usageCounts: [ObjectIdentifier: Int] = [:]
-        for memo in memos where !memo.isInRecycleBin {
-            var seen = Set<ObjectIdentifier>()
-            for tag in memo.tagsList {
-                let identifier = ObjectIdentifier(tag)
-                if seen.insert(identifier).inserted {
-                    usageCounts[identifier, default: 0] += 1
-                }
-            }
-        }
-
-        for tag in tags where !removedTags.contains(ObjectIdentifier(tag)) {
-            let actual = usageCounts[ObjectIdentifier(tag), default: 0]
-            if tag.usageCount != actual {
-                tag.usageCount = actual
                 hasChanges = true
             }
         }
@@ -64,15 +45,24 @@ enum TagMaintenance {
         return hasChanges
     }
 
-    private nonisolated static func canonicalOrder(_ lhs: Tag, _ rhs: Tag) -> Bool {
-        if lhs.createdAt != rhs.createdAt {
-            return lhs.createdAt < rhs.createdAt
-        }
-        if lhs.name != rhs.name {
-            return lhs.name < rhs.name
-        }
-        return String(describing: lhs.persistentModelID)
-            < String(describing: rhs.persistentModelID)
+    /// 创建时间相差小于此值时视为"无法判定先后"。
+    /// CloudKit 只保存毫秒精度，创建设备本地却是完整精度，且舍入方式未知，
+    /// 同一个标签在不同设备上的 `createdAt` 会有约 1ms 的偏差。
+    nonisolated static let createdAtTolerance: TimeInterval = 1
+
+    /// 选出要保留的标签；无法确定时返回 nil（本轮不合并）。
+    ///
+    /// 只有当某个标签比其余所有标签都早至少 `createdAtTolerance` 时才合并。
+    /// 这样任何"做出决定"的设备都会选中同一个标签（偏差远小于容差）；
+    /// 处在阈值边界时某台设备可能跳过、另一台合并，但跳过不删除任何东西，结果依然一致。
+    /// 不能用 `persistentModelID` 或名称兜底：前者各设备不同，
+    /// 后者会让"按时间判定"与"按名称判定"的设备删掉不同的标签。
+    nonisolated static func canonicalTag(in duplicates: [Tag]) -> Tag? {
+        let ordered = duplicates.sorted { $0.createdAt < $1.createdAt }
+        guard let earliest = ordered.first else { return nil }
+        guard ordered.count > 1 else { return earliest }
+        let gap = ordered[1].createdAt.timeIntervalSince(earliest.createdAt)
+        return gap >= createdAtTolerance ? earliest : nil
     }
 
     private nonisolated static func merge(_ duplicate: Tag, into canonical: Tag) {

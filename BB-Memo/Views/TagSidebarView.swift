@@ -10,12 +10,8 @@ import SwiftData
 
 /// 左侧滑出标签筛选菜单
 struct TagSidebarView: View {
-    @Query(
-        sort: [
-            SortDescriptor(\Tag.usageCount, order: .reverse),
-            SortDescriptor(\Tag.name, order: .forward)
-        ]
-    ) private var allTags: [Tag]
+    @Query(sort: [SortDescriptor(\Tag.name, order: .forward)])
+    private var allTags: [Tag]
     @Binding var selectedTag: Tag?
     @Binding var isRecycleBinSelected: Bool
     @Binding var isOpen: Bool
@@ -24,14 +20,17 @@ struct TagSidebarView: View {
     @State private var tagPendingDeletion: Tag?
     @State private var activeMemoCount = 0
     @State private var deletedMemoCount = 0
+    /// 标签使用次数只在本地计算，不写库（见 `Tag.usageCount` 注释）。
+    @State private var tagUsageCounts: [PersistentIdentifier: Int] = [:]
     @State private var tagSearchText = ""
     @State private var isTagSearchExpanded = false
     @FocusState private var isTagSearchFocused: Bool
     
     private var filteredTags: [Tag] {
         let keyword = tagSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !keyword.isEmpty else { return allTags }
-        return allTags.filter { $0.name.localizedCaseInsensitiveContains(keyword) }
+        let sorted = Tag.sortedByUsage(allTags, counts: tagUsageCounts)
+        guard !keyword.isEmpty else { return sorted }
+        return sorted.filter { $0.name.localizedCaseInsensitiveContains(keyword) }
     }
 
     private var tagListHeight: CGFloat {
@@ -95,6 +94,9 @@ struct TagSidebarView: View {
         }
         .onReceive(AppNotifications.dataChanges) {
             refreshMemoCounts()
+        }
+        .onChange(of: allTags.map(\.persistentModelID)) { _, _ in
+            tagUsageCounts = Tag.usageCounts(for: allTags)
         }
         .confirmationDialog(
             "删除标签？",
@@ -195,7 +197,7 @@ struct TagSidebarView: View {
                                     title: tag.name,
                                     icon: "#",
                                     isTag: true,
-                                    count: tag.usageCount,
+                                    count: tagUsageCounts[tag.persistentModelID, default: 0],
                                     isSelected: selectedTag?.persistentModelID == tag.persistentModelID,
                                     action: {
                                         collapseTagSearch()
@@ -301,6 +303,7 @@ struct TagSidebarView: View {
             activeMemoCount = 0
             deletedMemoCount = 0
         }
+        tagUsageCounts = Tag.usageCounts(for: allTags)
     }
 
     private func closeSidebar() {

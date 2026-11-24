@@ -98,11 +98,7 @@ private actor AppDataMaintenanceActor {
             let memos = try modelContext.fetch(FetchDescriptor<Memo>())
             let tags = try modelContext.fetch(FetchDescriptor<Tag>())
             let memoChanged = MemoMaintenance.reconcile(memos)
-            let tagChanged = TagMaintenance.reconcile(
-                tags: tags,
-                memos: memos,
-                in: modelContext
-            )
+            let tagChanged = TagMaintenance.reconcile(tags: tags, in: modelContext)
             let reminderResult = reminderSnapshots(from: memos)
             if memoChanged || tagChanged || reminderResult.hasChanges {
                 try modelContext.save()

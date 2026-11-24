@@ -174,6 +174,14 @@ final class SyncDiagnostics: ObservableObject {
         }
         .store(in: &cancellables)
 
+        // 用户登出/切换 iCloud 账号时及时更新状态，而不是等到下次回到前台。
+        NotificationCenter.default.publisher(for: .CKAccountChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                Task { await self?.refreshAccountStatus() }
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
