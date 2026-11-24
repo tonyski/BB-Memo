@@ -40,11 +40,41 @@ struct MemoEditorView: View {
 
     @FocusState private var isFocused: Bool
 
+    /// 打开编辑器时正文里已有的 `#标签`。正文里删掉这些标签时，对应标签也随之移除。
+    private let originalHashtagKeys: Set<String>
+
     init(memo: Memo?) {
         self.memo = memo
         _content = State(initialValue: memo?.content ?? "")
         _reminderDate = State(initialValue: memo?.reminderDate)
         _selectedTagNames = State(initialValue: Set<String>(memo?.tagsList.map(\.name) ?? []))
+        originalHashtagKeys = Set(
+            TagExtractor.extractHashtags(from: memo?.content ?? "").map(Tag.normalizedKey(for:))
+        )
+    }
+
+    /// 正文中当前写着的 `#标签`（保序去重）。
+    private var contentHashtags: [String] {
+        TagExtractor.extractHashtags(from: content)
+    }
+
+    private var contentHashtagKeys: Set<String> {
+        Set(contentHashtags.map(Tag.normalizedKey(for:)))
+    }
+
+    /// 最终保存的标签：手动选择的标签 + 正文中的 `#标签`，
+    /// 并去掉「原本写在正文里、这次被删掉」的标签。
+    private var effectiveTagNames: Set<String> {
+        let currentKeys = contentHashtagKeys
+        let removedKeys = originalHashtagKeys.subtracting(currentKeys)
+        var result = selectedTagNames.filter {
+            !removedKeys.contains(Tag.normalizedKey(for: $0))
+        }
+        let existingKeys = Set(result.map(Tag.normalizedKey(for:)))
+        for name in contentHashtags where !existingKeys.contains(Tag.normalizedKey(for: name)) {
+            result.insert(canonicalTagName(for: name))
+        }
+        return result
     }
 
     private var trimmedContent: String {
@@ -59,12 +89,6 @@ struct MemoEditorView: View {
                 .minute()
                 .locale(.autoupdatingCurrent)
         ) ?? "设置提醒"
-    }
-    private var reminderIconName: String {
-        reminderDate == nil ? "bell.badge" : "bell.fill"
-    }
-    private var reminderIconColor: Color {
-        reminderDate == nil ? AppTheme.brandAccent : AppTheme.warning
     }
     private enum ActiveSheet: Identifiable {
         case reminder
@@ -89,7 +113,15 @@ struct MemoEditorView: View {
         var result: [TagSuggestion] = []
         var seen = Set<String>()
 
-        for name in selectedTagNames.sorted() {
+        for name in contentHashtags {
+            let key = Tag.normalizedKey(for: name)
+            guard !key.isEmpty else { continue }
+            if seen.insert(key).inserted {
+                result.append(TagSuggestion(name: canonicalTagName(for: name)))
+            }
+        }
+
+        for name in effectiveTagNames.sorted() {
             let normalized = Tag.normalize(name)
             let key = Tag.normalizedKey(for: normalized)
             guard !key.isEmpty else { continue }
@@ -98,7 +130,7 @@ struct MemoEditorView: View {
             }
         }
 
-        for suggestion in frequentTagSuggestions {
+        for suggestion in (trimmedContent.isEmpty ? [] : frequentTagSuggestions) {
             let key = Tag.normalizedKey(for: suggestion.name)
             guard !key.isEmpty else { continue }
             if seen.insert(key).inserted {
@@ -270,31 +302,44 @@ struct MemoEditorView: View {
 
     private var bottomAccessoryArea: some View {
         VStack(spacing: 0) {
-            AISuggestionBar(
-                suggestions: mergedTagSuggestions,
-                selectedTagNames: selectedTagNames
-            ) { tag in
-                toggleTagByName(tag.name)
-                HapticFeedback.light.play()
-            } onAddCustom: {
-                activeSheet = .tagPicker
+            if !mergedTagSuggestions.isEmpty {
+                AISuggestionBar(
+                    suggestions: mergedTagSuggestions,
+                    selectedTagNames: effectiveTagNames,
+                    lockedTagKeys: contentHashtagKeys
+                ) { tag in
+                    toggleTagByName(tag.name)
+                    HapticFeedback.light.play()
+                }
+                .transition(.opacity)
             }
-            .animation(nil, value: selectedTagNames)
-            .animation(nil, value: mergedTagSuggestions.map(\.id))
 
-            HStack(spacing: 10) {
+            Divider().opacity(0.5)
+
+            HStack(spacing: 2) {
+                tagPickerButton
                 imageOCRButton
-                    .frame(maxWidth: .infinity)
                 speechInputButton
-                    .frame(maxWidth: .infinity)
                 reminderButton
-                    .frame(maxWidth: .infinity)
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, AppTheme.Layout.screenPadding)
-            .padding(.top, 10)
-            .padding(.bottom, 10)
+            .padding(.vertical, 4)
         }
         .background(AppTheme.cardBackground)
+        .animation(AppTheme.snappy, value: mergedTagSuggestions.isEmpty)
+    }
+
+    private var tagPickerButton: some View {
+        Button {
+            activeSheet = .tagPicker
+            HapticFeedback.light.play()
+        } label: {
+            toolbarIcon("number")
+        }
+        .buttonStyle(.plain)
+        .disabled(speechService.isActive)
+        .accessibilityLabel("添加标签")
     }
 
     // MARK: - Actions
@@ -316,7 +361,7 @@ struct MemoEditorView: View {
                 memo: memo,
                 content: trimmedContent,
                 reminderDate: reminderDate,
-                selectedTagNames: selectedTagNames,
+                selectedTagNames: effectiveTagNames,
                 context: modelContext
             )
         } catch {
@@ -391,12 +436,18 @@ struct MemoEditorView: View {
             guard !isRecognizingImageText else { return }
             showImageSourceDialog = true
         } label: {
-            compactAccessoryActionStyle {
-                imageOCRLabelContent(title: isRecognizingImageText ? "提取中" : "图片")
+            if isRecognizingImageText {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(AppTheme.brandAccent)
+                    .frame(width: 44, height: 44)
+            } else {
+                toolbarIcon("text.viewfinder")
             }
         }
         .buttonStyle(.plain)
         .disabled(isRecognizingImageText || speechService.isActive)
+        .accessibilityLabel(isRecognizingImageText ? "正在提取图片文字" : "从图片提取文字")
         .popover(
             isPresented: $showImageSourceDialog,
             attachmentAnchor: .point(.top),
@@ -405,25 +456,6 @@ struct MemoEditorView: View {
             imageSourcePopoverContent
                 .presentationCompactAdaptation(.popover)
         }
-    }
-
-    @ViewBuilder
-    private func imageOCRLabelContent(title: String) -> some View {
-        Group {
-            if isRecognizingImageText {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(AppTheme.brandAccent)
-            } else {
-                Image(systemName: "text.viewfinder")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(AppTheme.brandAccent)
-            }
-        }
-        Text(title)
-            .font(.system(size: 14, weight: .regular, design: AppTheme.Layout.fontDesign))
-            .foregroundStyle(.primary)
-            .lineLimit(1)
     }
 
     @ViewBuilder
@@ -518,46 +550,55 @@ struct MemoEditorView: View {
             activeSheet = .reminder
             HapticFeedback.light.play()
         } label: {
-            compactAccessoryActionStyle {
-                reminderLabelContent(title: reminderDate == nil ? "提醒" : reminderCompactButtonTitle)
+            if reminderDate == nil {
+                toolbarIcon("bell")
+            } else {
+                HStack(spacing: 5) {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(reminderCompactButtonTitle)
+                        .font(.system(size: 13, weight: .medium, design: AppTheme.Layout.fontDesign))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(AppTheme.warning)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(AppTheme.warning.opacity(0.12), in: Capsule())
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
         }
         .buttonStyle(.plain)
         .disabled(speechService.isActive)
-    }
-
-    @ViewBuilder
-    private func reminderLabelContent(title: String) -> some View {
-        Image(systemName: reminderIconName)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(reminderIconColor)
-        Text(title)
-            .font(.system(size: 14, weight: .regular, design: AppTheme.Layout.fontDesign))
-            .foregroundStyle(.primary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.75)
+        .accessibilityLabel(reminderDate == nil ? "设置提醒" : "提醒：\(reminderCompactButtonTitle)")
     }
 
     private var speechInputButton: some View {
         Button {
             handleSpeechButtonTap()
         } label: {
-            compactAccessoryActionStyle(
-                accentColor: speechService.isActive ? .red : AppTheme.brandAccent
-            ) {
-                Group {
+            if speechService.isActive {
+                HStack(spacing: 5) {
                     if speechService.state.showsProgress {
                         ProgressView()
-                            .controlSize(.small)
+                            .controlSize(.mini)
                             .tint(.red)
                     } else {
-                        Image(systemName: speechService.isRecording ? "stop.fill" : "mic.fill")
-                            .font(.system(size: 15, weight: .semibold))
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 12, weight: .semibold))
                     }
+                    Text(speechService.state.buttonTitle)
+                        .font(.system(size: 13, weight: .medium, design: AppTheme.Layout.fontDesign))
+                        .lineLimit(1)
                 }
-                Text(speechService.state.buttonTitle)
-                    .font(.system(size: 14, weight: .regular, design: AppTheme.Layout.fontDesign))
-                    .lineLimit(1)
+                .foregroundStyle(.red)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.red.opacity(0.1), in: Capsule())
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            } else {
+                toolbarIcon("mic")
             }
         }
         .buttonStyle(.plain)
@@ -618,18 +659,12 @@ struct MemoEditorView: View {
         speechService.cancel()
     }
 
-    private func compactAccessoryActionStyle<Content: View>(
-        accentColor: Color = AppTheme.brandAccent,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        HStack(spacing: 7) {
-            content()
-        }
-        .foregroundStyle(accentColor)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 11)
-        .background(accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    private func toolbarIcon(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 18, weight: .regular))
+            .foregroundStyle(AppTheme.brandAccent)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 
 }

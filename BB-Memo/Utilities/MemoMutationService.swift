@@ -46,10 +46,18 @@ enum MemoMutationService {
         try save(context)
     }
 
-    static func restoreMemo(_ memo: Memo, context: ModelContext) throws {
+    /// - Parameter reminderDate: 非 nil 时一并恢复提醒（移入回收站会清空提醒），与恢复在同一次保存中完成。
+    static func restoreMemo(
+        _ memo: Memo,
+        reminderDate: Date? = nil,
+        context: ModelContext
+    ) throws {
         memo.isDeleted = false
         memo.deletedAt = nil
         memo.updatedAt = .now
+        if let reminderDate {
+            memo.reminderDate = reminderDate
+        }
         try save(context)
     }
 

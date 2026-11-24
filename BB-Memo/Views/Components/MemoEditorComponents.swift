@@ -11,8 +11,9 @@ import SwiftData
 struct AISuggestionBar: View {
     let suggestions: [TagSuggestion]
     let selectedTagNames: Set<String>
+    /// 正文里写着的 `#标签`：始终视为已选，不能在这里取消（需要改正文）。
+    var lockedTagKeys: Set<String> = []
     var onAction: (TagSuggestion) -> Void
-    var onAddCustom: () -> Void
 
     private var selectedTagKeys: Set<String> {
         Set(
@@ -20,30 +21,21 @@ struct AISuggestionBar: View {
                 let normalized = Tag.normalize(name)
                 return normalized.isEmpty ? nil : Tag.normalizedKey(for: normalized)
             }
-        )
+        ).union(lockedTagKeys)
     }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                Button(action: onAddCustom) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                        Text("添加")
-                    }
-                    .font(.system(size: 12, weight: .semibold, design: AppTheme.Layout.fontDesign))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(AppTheme.brandAccent.opacity(0.12))
-                    .foregroundStyle(AppTheme.brandAccent)
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-
                 ForEach(suggestions) { suggestion in
                     let suggestionKey = Tag.normalizedKey(for: suggestion.name)
                     let isSelected = selectedTagKeys.contains(suggestionKey)
-                    Button { onAction(suggestion) } label: {
+                    let isLocked = lockedTagKeys.contains(suggestionKey)
+                    Button {
+                        // 正文里的标签需要改正文才能去掉，这里点了不做处理。
+                        guard !isLocked else { return }
+                        onAction(suggestion)
+                    } label: {
                         Text("#\(suggestion.name)")
                         .font(.system(size: 13, weight: .semibold, design: AppTheme.Layout.fontDesign))
                         .padding(.horizontal, 12)
@@ -59,6 +51,9 @@ struct AISuggestionBar: View {
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("标签 \(suggestion.name)")
+                    .accessibilityValue(isSelected ? "已选中" : "未选中")
+                    .accessibilityHint(isLocked ? "正文中包含此标签" : "")
                 }
             }
             .padding(.horizontal, AppTheme.Layout.screenPadding)
@@ -67,7 +62,6 @@ struct AISuggestionBar: View {
         .transaction { transaction in
             transaction.animation = nil
         }
-        Divider().opacity(0.5)
     }
 }
 

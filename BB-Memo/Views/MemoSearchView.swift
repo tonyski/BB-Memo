@@ -128,7 +128,6 @@ struct MemoSearchView: View {
                                 }
                                 dismiss()
                             })
-                            .memoCardStyle()
                         }
                     }
                     .padding(.horizontal, 16)

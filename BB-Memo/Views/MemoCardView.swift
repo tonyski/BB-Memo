@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 /// 单条 Memo — 带 dropdown 菜单
 struct MemoCardView: View {
@@ -47,6 +48,9 @@ struct MemoCardView: View {
     var onEdit: (() -> Void)?
     var onTagTap: ((Tag) -> Void)?
     var onMemoRemoved: ((UUID) -> Void)?
+    /// 提供时，「删除」直接移入回收站不再弹确认，由调用方展示「撤销」。
+    /// 参数为笔记及其删除前的提醒时间（移入回收站会清空提醒）。
+    var onMovedToRecycleBin: ((Memo, Date?) -> Void)?
 
     @State private var isExpanded = false
     @State private var pendingDeleteAction: PendingDeleteAction?
@@ -61,6 +65,12 @@ struct MemoCardView: View {
         }
         .padding(.bottom, 3)
         .padding(.horizontal, AppTheme.Layout.cardPadding)
+        .memoCardStyle()
+        .contentShape(
+            .contextMenuPreview,
+            RoundedRectangle(cornerRadius: AppTheme.Layout.cornerRadius)
+        )
+        .contextMenu { menuItems }
         .sensoryFeedback(.impact, trigger: isExpanded)
         .alert(
             pendingDeleteAction?.title ?? "",
@@ -120,53 +130,73 @@ struct MemoCardView: View {
     
     // ... memoMenu ...
     
-    private var memoMenu: some View {
-        Menu {
-            if mode == .recycleBin {
-                Button {
-                    withAnimation(AppTheme.spring) {
-                        do {
-                            try MemoMutationService.restoreMemo(memo, context: modelContext)
-                            onMemoRemoved?(memo.stableID)
-                            AppNotifications.postMemoDataChanged()
-                        } catch {
-                            print("MemoCardView restore failed: \(error)")
-                        }
+    @ViewBuilder
+    private var menuItems: some View {
+        if mode == .recycleBin {
+            Button {
+                withAnimation(AppTheme.spring) {
+                    do {
+                        try MemoMutationService.restoreMemo(memo, context: modelContext)
+                        onMemoRemoved?(memo.stableID)
+                        AppNotifications.postMemoDataChanged()
+                    } catch {
+                        print("MemoCardView restore failed: \(error)")
                     }
-                } label: {
-                    Label("恢复", systemImage: "arrow.uturn.backward")
                 }
-                Button(role: .destructive) {
-                    presentDeleteAlert(.permanent)
-                } label: {
-                    Label("彻底删除", systemImage: "trash")
-                }
-            } else {
+            } label: {
+                Label("恢复", systemImage: "arrow.uturn.backward")
+            }
+            Button(role: .destructive) {
+                presentDeleteAlert(.permanent)
+            } label: {
+                Label("彻底删除", systemImage: "trash")
+            }
+        } else {
+            if onEdit != nil {
                 Button { onEdit?() } label: {
                     Label("编辑", systemImage: "pencil")
                 }
-                Button {
-                    withAnimation(AppTheme.spring) {
-                        do {
-                            try MemoMutationService.togglePinned(memo, context: modelContext)
-                            AppNotifications.postMemoDataChanged()
-                        } catch {
-                            print("MemoCardView togglePinned failed: \(error)")
-                        }
-                    }
-                } label: {
-                    Label(
-                        memo.isPinned ? "取消置顶" : "置顶",
-                        systemImage: memo.isPinned ? "pin.slash" : "pin"
-                    )
-                }
-                Divider()
-                Button(role: .destructive) {
-                    presentDeleteAlert(.recycle)
-                } label: {
-                    Label("删除", systemImage: "trash")
-                }
             }
+            Button {
+                UIPasteboard.general.string = memo.content
+                HapticFeedback.light.play()
+            } label: {
+                Label("复制", systemImage: "doc.on.doc")
+            }
+            ShareLink(item: memo.content) {
+                Label("分享", systemImage: "square.and.arrow.up")
+            }
+            Button {
+                withAnimation(AppTheme.spring) {
+                    do {
+                        try MemoMutationService.togglePinned(memo, context: modelContext)
+                        AppNotifications.postMemoDataChanged()
+                    } catch {
+                        print("MemoCardView togglePinned failed: \(error)")
+                    }
+                }
+            } label: {
+                Label(
+                    memo.isPinned ? "取消置顶" : "置顶",
+                    systemImage: memo.isPinned ? "pin.slash" : "pin"
+                )
+            }
+            Divider()
+            Button(role: .destructive) {
+                if onMovedToRecycleBin != nil {
+                    moveToRecycleBin()
+                } else {
+                    presentDeleteAlert(.recycle)
+                }
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    private var memoMenu: some View {
+        Menu {
+            menuItems
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 14))
@@ -176,17 +206,20 @@ struct MemoCardView: View {
         }
         .sensoryFeedback(.selection, trigger: memo.isPinned)
         .accessibilityLabel("更多操作")
-        .accessibilityHint("编辑、置顶或删除这条笔记")
+        .accessibilityHint("编辑、复制、分享、置顶或删除这条笔记")
     }
 
     private func moveToRecycleBin() {
         let reminderID = memo.reminderIdentifier
+        let previousReminderDate = memo.reminderDate
         withAnimation(AppTheme.spring) {
             do {
                 try MemoMutationService.deleteMemo(memo, context: modelContext)
                 onMemoRemoved?(memo.stableID)
                 NotificationManager.cancelReminder(memoID: reminderID)
                 AppNotifications.postMemoDataChanged()
+                HapticFeedback.medium.play()
+                onMovedToRecycleBin?(memo, previousReminderDate)
             } catch {
                 print("MemoCardView moveToRecycleBin failed: \(error)")
             }
@@ -232,6 +265,13 @@ struct MemoCardView: View {
             .foregroundStyle(.primary)
             .lineSpacing(6)
             .lineLimit(memo.isLong && !isExpanded ? 6 : nil)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onEdit?()
+            }
+            .accessibilityAddTraits(onEdit == nil ? [] : .isButton)
+            .accessibilityHint(onEdit == nil ? "" : "轻点编辑")
 
         if memo.isLong {
             Button {

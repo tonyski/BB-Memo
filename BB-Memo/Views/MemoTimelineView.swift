@@ -30,6 +30,15 @@ struct MemoTimelineView: View {
     @State private var totalMemoCount = 0
     @State private var reloadTask: Task<Void, Never>?
     @State private var loadErrorMessage: String?
+    @State private var recentlyRecycled: RecycledMemo?
+    @State private var undoDismissTask: Task<Void, Never>?
+
+    /// 刚移入回收站、可撤销的笔记。
+    private struct RecycledMemo: Identifiable {
+        let id = UUID()
+        let memo: Memo
+        let reminderDate: Date?
+    }
 
     private let pageSize = 40
     private let topBarFadeAnimation = Animation.easeOut(duration: 0.12)
@@ -52,6 +61,14 @@ struct MemoTimelineView: View {
         .overlay(alignment: .leading) {
             edgeOpenSidebarHotZone
         }
+        .overlay(alignment: .bottom) {
+            if let recentlyRecycled, !showSidebar {
+                undoToast(for: recentlyRecycled)
+                    .padding(.bottom, 92)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(AppTheme.spring, value: recentlyRecycled?.id)
         .navigationBarHidden(true)
         .sheet(item: $memoToEdit) { memo in
             MemoEditorSheetView(memo: memo)
@@ -80,6 +97,7 @@ struct MemoTimelineView: View {
         }
         .onDisappear {
             reloadTask?.cancel()
+            undoDismissTask?.cancel()
         }
     }
 
@@ -189,9 +207,11 @@ struct MemoTimelineView: View {
                             },
                             onMemoRemoved: { stableID in
                                 removeMemoFromDisplayedList(stableID: stableID)
+                            },
+                            onMovedToRecycleBin: isRecycleBinSelected ? nil : { memo, reminderDate in
+                                showUndoToast(for: memo, reminderDate: reminderDate)
                             }
                         )
-                        .memoCardStyle()
                         .transition(
                             .asymmetric(
                                 insertion: .opacity.combined(with: .move(edge: .top)),
@@ -283,6 +303,73 @@ struct MemoTimelineView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, displayedMemos.isEmpty ? 120 : 20)
+    }
+
+    // MARK: - 撤销删除
+
+    private func undoToast(for item: RecycledMemo) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "trash")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+            Text("已移入回收站")
+                .font(.system(size: 14, design: AppTheme.Layout.fontDesign))
+            Spacer(minLength: 8)
+            Button("撤销") {
+                undoRecycle(item)
+            }
+            .font(.system(size: 14, weight: .semibold, design: AppTheme.Layout.fontDesign))
+            .foregroundStyle(AppTheme.brandAccent)
+        }
+        .padding(.leading, 16)
+        .padding(.trailing, 12)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: Capsule())
+        .premiumShadow()
+        .padding(.horizontal, 24)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func showUndoToast(for memo: Memo, reminderDate: Date?) {
+        let item = RecycledMemo(memo: memo, reminderDate: reminderDate)
+        recentlyRecycled = item
+        undoDismissTask?.cancel()
+        undoDismissTask = Task {
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, recentlyRecycled?.id == item.id else { return }
+            recentlyRecycled = nil
+        }
+    }
+
+    private func undoRecycle(_ item: RecycledMemo) {
+        undoDismissTask?.cancel()
+        recentlyRecycled = nil
+        let memo = item.memo
+        // 期间可能已被其他设备彻底删除或恢复。
+        guard memo.modelContext != nil, memo.isInRecycleBin else { return }
+        let reminderDate = item.reminderDate.flatMap { $0 > .now ? $0 : nil }
+        do {
+            try MemoMutationService.restoreMemo(
+                memo,
+                reminderDate: reminderDate,
+                context: modelContext
+            )
+            if let date = reminderDate {
+                let memoID = memo.reminderIdentifier
+                let content = memo.content
+                Task {
+                    _ = await NotificationManager.scheduleReminder(
+                        memoID: memoID,
+                        content: content,
+                        at: date
+                    )
+                }
+            }
+            HapticFeedback.light.play()
+            AppNotifications.postMemoDataChanged()
+        } catch {
+            print("MemoTimelineView undo recycle failed: \(error)")
+        }
     }
 
     // MARK: - Paging

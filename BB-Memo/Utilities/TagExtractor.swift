@@ -12,8 +12,10 @@ import NaturalLanguage
 enum TagExtractor {
 
     // 预编译正则，避免每次调用重新创建
+    /// `#` 前不能紧跟 URL / 实体等符号（避免把 `a.com/x#section`、`&#123;` 当成标签），
+    /// 标签名至少包含一个字母或汉字（避免 `第#1名` 这类纯数字）。
     nonisolated private static let hashtagRegex = try! NSRegularExpression(
-        pattern: #"#([\p{L}\p{N}_]+)"#
+        pattern: #"(?<![A-Za-z0-9_/&#.=?:])#([\p{L}\p{N}_]*\p{L}[\p{L}\p{N}_]*)"#
     )
 
     // MARK: - 正则提取 #标签
